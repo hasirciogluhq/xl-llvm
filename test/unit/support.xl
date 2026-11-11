@@ -6,14 +6,15 @@ import * from "xl-llvm"
 /// The printed text of `m`, or `error: <message>` when printing fails.
 export fn text(m: *Module) -> String {
     local r: Result<String, String> = m.print()
+    local out: String = String()
     switch r {
-        case Result.Ok(s) { return s.clone() }
+        case Result.Ok(s) { out = s.clone() }
         case Result.Err(e) {
-            local out: String = String("error: ")
+            out = String("error: ")
             out.append(&e)
-            return out
         }
     }
+    return out
 }
 
 /// Fails the test, showing both texts, unless `hay` contains `needle`.

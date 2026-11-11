@@ -1,0 +1,146 @@
+// The type system: uniquing, text of every type form, identified structs and the width checks.
+// https://llvm.org/docs/LangRef.html#type-system
+from "std" import String, Vec
+from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectTrue, expectFalse, expectEq, expectEqStr
+from "support" import text, expectHas, sig0
+import * from "xl-llvm"
+
+fn uniquing(t: *T) {
+    local ctx: Context = Context()
+    expectEq(t, ctx.int32().id as i64, ctx.int32().id as i64)
+    expectTrue(t, ctx.int32().id != ctx.int64().id)
+    expectEq(t, ctx.ptr().id as i64, ctx.ptr().id as i64)
+    expectEq(t, ctx.arrayType(ctx.int8(), 4).id as i64, ctx.arrayType(ctx.int8(), 4).id as i64)
+    expectTrue(t, ctx.arrayType(ctx.int8(), 4).id != ctx.arrayType(ctx.int8(), 5).id)
+    local p: Vec<Type> = Vec<Type>()
+    p.push(ctx.int32())
+    local q: Vec<Type> = Vec<Type>()
+    q.push(ctx.int32())
+    expectEq(t, ctx.fnType(ctx.voidType(), p).id as i64, ctx.fnType(ctx.voidType(), q).id as i64)
+    expectTrue(t, ctx.isInt(ctx.int16()))
+    expectTrue(t, ctx.isFloat(ctx.float32()))
+    expectTrue(t, ctx.isPtr(ctx.ptr()))
+    expectTrue(t, ctx.isVoid(ctx.voidType()))
+    expectFalse(t, ctx.isInt(ctx.float64()))
+    expectEq(t, ctx.bitWidth(ctx.int32()) as i64, 32)
+    expectEq(t, ctx.bitWidth(ctx.float64()) as i64, 64)
+    expectEq(t, ctx.bitWidth(ctx.ptr()) as i64, 0)
+}
+
+fn scalarTypes(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    m.setInitializer(m.addGlobal(String("a"), ctx.int1()), ctx.zero(ctx.int1()))
+    m.setInitializer(m.addGlobal(String("b"), ctx.intType(7)), ctx.zero(ctx.intType(7)))
+    m.setInitializer(m.addGlobal(String("c"), ctx.int64()), ctx.zero(ctx.int64()))
+    m.setInitializer(m.addGlobal(String("d"), ctx.floatType(16)), ctx.zero(ctx.floatType(16)))
+    m.setInitializer(m.addGlobal(String("e"), ctx.float32()), ctx.zero(ctx.float32()))
+    m.setInitializer(m.addGlobal(String("f"), ctx.float64()), ctx.zero(ctx.float64()))
+    m.setInitializer(m.addGlobal(String("g"), ctx.ptr()), ctx.null())
+    local s: String = text(&m)
+    expectHas(t, &s, "@a = global i1 zeroinitializer\n")
+    expectHas(t, &s, "@b = global i7 zeroinitializer\n")
+    expectHas(t, &s, "@c = global i64 zeroinitializer\n")
+    expectHas(t, &s, "@d = global half zeroinitializer\n")
+    expectHas(t, &s, "@e = global float zeroinitializer\n")
+    expectHas(t, &s, "@f = global double zeroinitializer\n")
+    expectHas(t, &s, "@g = global ptr null\n")
+}
+
+fn aggregateTypes(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local fields: Vec<Type> = Vec<Type>()
+    fields.push(ctx.int32())
+    fields.push(ctx.arrayType(ctx.int8(), 4))
+    local st: Type = ctx.structType(fields, false)
+    local f2: Vec<Type> = Vec<Type>()
+    f2.push(ctx.int8())
+    f2.push(ctx.int32())
+    local packed: Type = ctx.structType(f2, true)
+    local empty: Type = ctx.structType(Vec<Type>(), false)
+    local nested: Type = ctx.arrayType(ctx.arrayType(ctx.int16(), 3), 2)
+    m.setInitializer(m.addGlobal(String("s"), st), ctx.zero(st))
+    m.setInitializer(m.addGlobal(String("p"), packed), ctx.zero(packed))
+    m.setInitializer(m.addGlobal(String("e"), empty), ctx.zero(empty))
+    m.setInitializer(m.addGlobal(String("n"), nested), ctx.zero(nested))
+    local s: String = text(&m)
+    expectHas(t, &s, "@s = global { i32, [4 x i8] } zeroinitializer\n")
+    expectHas(t, &s, "@p = global <{ i8, i32 }> zeroinitializer\n")
+    expectHas(t, &s, "@e = global {} zeroinitializer\n")
+    expectHas(t, &s, "@n = global [2 x [3 x i16]] zeroinitializer\n")
+}
+
+fn functionTypes(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local p: Vec<Type> = Vec<Type>()
+    p.push(ctx.ptr())
+    m.addFunction(String("printf"), ctx.fnType(ctx.int32(), p, true))
+    m.addFunction(String("noargs"), sig0(&ctx, ctx.voidType()))
+    local only: Type = ctx.fnType(ctx.voidType(), Vec<Type>(), true)
+    m.addFunction(String("onlyva"), only)
+    local s: String = text(&m)
+    expectHas(t, &s, "declare i32 @printf(ptr, ...)\n")
+    expectHas(t, &s, "declare void @noargs()\n")
+    expectHas(t, &s, "declare void @onlyva(...)\n")
+}
+
+fn identifiedStructs(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local node: Type = ctx.namedStruct(String("Node"))
+    expectEq(t, ctx.namedStruct(String("Node")).id as i64, node.id as i64)
+    local fields: Vec<Type> = Vec<Type>()
+    fields.push(ctx.int32())
+    fields.push(ctx.ptr())
+    ctx.setBody(node, fields, false)
+    local hidden: Type = ctx.namedStruct(String("Hidden"))
+    local weird: Type = ctx.namedStruct(String("a b"))
+    m.setInitializer(m.addGlobal(String("n"), node), ctx.zero(node))
+    m.addGlobal(String("h"), hidden)
+    m.addGlobal(String("w"), weird)
+    local s: String = text(&m)
+    expectHas(t, &s, "%Node = type { i32, ptr }\n")
+    expectHas(t, &s, "%Hidden = type opaque\n")
+    expectHas(t, &s, "%\"a b\" = type opaque\n")
+    expectHas(t, &s, "@n = global %Node zeroinitializer\n")
+    expectHas(t, &s, "@h = external global %Hidden\n")
+}
+
+fn secondBodyIsAnError(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local node: Type = ctx.namedStruct(String("Node"))
+    ctx.setBody(node, Vec<Type>(), false)
+    ctx.setBody(node, Vec<Type>(), false)
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: setBody: the type is not an opaque identified struct")
+}
+
+fn widthChecks(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    ctx.intType(0)
+    ctx.intType(65)
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: intType: width 0 is outside 1..64")
+    local ctx2: Context = Context()
+    local m2: Module = Module(&ctx2, String("t"))
+    ctx2.floatType(80)
+    local s2: String = text(&m2)
+    expectEqStr(t, s2.asStr(), "error: floatType: width 80 is not 16, 32 or 64")
+}
+
+@entry fn main() -> i32 {
+    local s: Suite
+    suiteInit(&s)
+    test(&s, "types are uniqued", uniquing)
+    test(&s, "integer, float and pointer types", scalarTypes)
+    test(&s, "array and struct types", aggregateTypes)
+    test(&s, "function types", functionTypes)
+    test(&s, "identified structs", identifiedStructs)
+    test(&s, "a second struct body is an error", secondBodyIsAnError)
+    test(&s, "invalid widths are errors", widthChecks)
+    return suiteRun(&s)
+}

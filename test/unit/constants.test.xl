@@ -1,0 +1,147 @@
+// Constants: integers, floating point, null, undef, poison, zeroinitializer, aggregates, c"" strings and constant GEPs.
+// https://llvm.org/docs/LangRef.html#constants
+from "std" import String, Vec
+from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectEqStr
+from "support" import text, expectHas
+import * from "xl-llvm"
+
+fn integers(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    m.setInitializer(m.addGlobal(String("a"), ctx.int32()), ctx.constInt(ctx.int32(), -5))
+    m.setInitializer(m.addGlobal(String("b"), ctx.int8()), ctx.constInt(ctx.int8(), 300))     // truncated to 44
+    m.setInitializer(m.addGlobal(String("c"), ctx.int8()), ctx.constInt(ctx.int8(), -1))      // printed sign-extended
+    m.setInitializer(m.addGlobal(String("d"), ctx.int64()), ctx.constInt(ctx.int64(), -9223372036854775807 - 1))
+    m.setInitializer(m.addGlobal(String("e"), ctx.int1()), ctx.constBool(true))
+    m.setInitializer(m.addGlobal(String("f"), ctx.int1()), ctx.constBool(false))
+    m.setInitializer(m.addGlobal(String("g"), ctx.int16()), ctx.constInt(ctx.int16(), 65535))  // -1 in 16 bits
+    m.setInitializer(m.addGlobal(String("h"), ctx.int64()), ctx.constInt(ctx.int64(), 9223372036854775807))
+    local s: String = text(&m)
+    expectHas(t, &s, "@a = global i32 -5\n")
+    expectHas(t, &s, "@b = global i8 44\n")
+    expectHas(t, &s, "@c = global i8 -1\n")
+    expectHas(t, &s, "@d = global i64 -9223372036854775808\n")
+    expectHas(t, &s, "@e = global i1 true\n")
+    expectHas(t, &s, "@f = global i1 false\n")
+    expectHas(t, &s, "@g = global i16 -1\n")
+    expectHas(t, &s, "@h = global i64 9223372036854775807\n")
+}
+
+fn floats(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    m.setInitializer(m.addGlobal(String("a"), ctx.float64()), ctx.constFloat(ctx.float64(), 1.5))
+    m.setInitializer(m.addGlobal(String("b"), ctx.float64()), ctx.constFloat(ctx.float64(), 1.0))
+    m.setInitializer(m.addGlobal(String("c"), ctx.float64()), ctx.constFloat(ctx.float64(), -2.0))
+    m.setInitializer(m.addGlobal(String("d"), ctx.float32()), ctx.constFloat(ctx.float32(), 0.1))   // rounded to single precision
+    m.setInitializer(m.addGlobal(String("e"), ctx.float32()), ctx.constFloat(ctx.float32(), 1.0))
+    local s: String = text(&m)
+    expectHas(t, &s, "@a = global double 0x3FF8000000000000\n")
+    expectHas(t, &s, "@b = global double 0x3FF0000000000000\n")
+    expectHas(t, &s, "@c = global double 0xC000000000000000\n")
+    expectHas(t, &s, "@d = global float 0x3FB99999A0000000\n")
+    expectHas(t, &s, "@e = global float 0x3FF0000000000000\n")
+}
+
+fn specials(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    m.setInitializer(m.addGlobal(String("p"), ctx.ptr()), ctx.null())
+    m.setInitializer(m.addGlobal(String("u"), ctx.int32()), ctx.undef(ctx.int32()))
+    m.setInitializer(m.addGlobal(String("q"), ctx.int32()), ctx.poison(ctx.int32()))
+    m.setInitializer(m.addGlobal(String("z"), ctx.arrayType(ctx.int32(), 4)), ctx.zero(ctx.arrayType(ctx.int32(), 4)))
+    local s: String = text(&m)
+    expectHas(t, &s, "@p = global ptr null\n")
+    expectHas(t, &s, "@u = global i32 undef\n")
+    expectHas(t, &s, "@q = global i32 poison\n")
+    expectHas(t, &s, "@z = global [4 x i32] zeroinitializer\n")
+}
+
+fn aggregates(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local fields: Vec<Type> = Vec<Type>()
+    fields.push(ctx.int32())
+    fields.push(ctx.ptr())
+    local st: Type = ctx.structType(fields, false)
+    local elems: Vec<Value> = Vec<Value>()
+    elems.push(ctx.constInt(ctx.int32(), 1))
+    elems.push(ctx.null())
+    m.setInitializer(m.addGlobal(String("s"), st), ctx.constStruct(st, elems))
+    local at: Type = ctx.arrayType(ctx.int32(), 2)
+    local items: Vec<Value> = Vec<Value>()
+    items.push(ctx.constInt(ctx.int32(), 10))
+    items.push(ctx.constInt(ctx.int32(), 20))
+    m.setInitializer(m.addGlobal(String("a"), at), ctx.constArray(at, items))
+    local pf: Vec<Type> = Vec<Type>()
+    pf.push(ctx.int8())
+    pf.push(ctx.int16())
+    local pt: Type = ctx.structType(pf, true)
+    local pe: Vec<Value> = Vec<Value>()
+    pe.push(ctx.constInt(ctx.int8(), 1))
+    pe.push(ctx.constInt(ctx.int16(), 2))
+    m.setInitializer(m.addGlobal(String("p"), pt), ctx.constStruct(pt, pe))
+    local s: String = text(&m)
+    expectHas(t, &s, "@s = global { i32, ptr } { i32 1, ptr null }\n")
+    expectHas(t, &s, "@a = global [2 x i32] [ i32 10, i32 20 ]\n")
+    expectHas(t, &s, "@p = global <{ i8, i16 }> <{ i8 1, i16 2 }>\n")
+}
+
+fn aggregateMismatch(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local at: Type = ctx.arrayType(ctx.int32(), 2)
+    local items: Vec<Value> = Vec<Value>()
+    items.push(ctx.constInt(ctx.int32(), 10))
+    ctx.constArray(at, items)
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: constArray: the elements do not match the array type")
+}
+
+fn stringsAndGeps(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local hi: Value = ctx.constString(String("hi"), true)
+    local g: Value = m.addGlobal(String("str"), ctx.typeOf(hi))
+    m.setInitializer(g, hi)
+    m.setConstant(g, true)
+    m.setGlobalLinkage(g, Linkage.Private)
+    local raw: Value = ctx.constString(String("a\"b\\c\n"), false)
+    m.setInitializer(m.addGlobal(String("raw"), ctx.typeOf(raw)), raw)
+    local idx: Vec<Value> = Vec<Value>()
+    idx.push(ctx.constInt(ctx.int64(), 0))
+    idx.push(ctx.constInt(ctx.int64(), 1))
+    local at: Type = ctx.typeOf(hi)
+    m.setInitializer(m.addGlobal(String("q"), ctx.ptr()), ctx.constGep(at, g, idx))
+    local s: String = text(&m)
+    expectHas(t, &s, "@str = private constant [3 x i8] c\"hi\\00\"\n")
+    expectHas(t, &s, "@raw = global [6 x i8] c\"a\\22b\\5Cc\\0A\"\n")
+    expectHas(t, &s, "@q = global ptr getelementptr inbounds ([3 x i8], ptr @str, i64 0, i64 1)\n")
+}
+
+fn wrongConstantType(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    ctx.constInt(ctx.float64(), 1)
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: constInt: the type is not an integer type")
+    local ctx2: Context = Context()
+    local m2: Module = Module(&ctx2, String("t"))
+    local g: Value = m2.addGlobal(String("g"), ctx2.int32())
+    m2.setInitializer(g, ctx2.constInt(ctx2.int64(), 1))
+    local s2: String = text(&m2)
+    expectEqStr(t, s2.asStr(), "error: setInitializer: the initializer type differs from the global's type")
+}
+
+@entry fn main() -> i32 {
+    local s: Suite
+    suiteInit(&s)
+    test(&s, "integer constants", integers)
+    test(&s, "floating-point constants", floats)
+    test(&s, "null, undef, poison, zeroinitializer", specials)
+    test(&s, "struct and array constants", aggregates)
+    test(&s, "an aggregate that does not match its type is an error", aggregateMismatch)
+    test(&s, "c strings and constant GEPs", stringsAndGeps)
+    test(&s, "wrong constant types are errors", wrongConstantType)
+    return suiteRun(&s)
+}

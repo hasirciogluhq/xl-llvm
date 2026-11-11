@@ -17,24 +17,27 @@ from "std/os" import env
 
 global tempCounter: u64 = 0
 
-/// A fresh temporary path with extension `ext`, in the directory of `TMPDIR` or `TEMP` (default `/tmp`).
-fn tempPath(ext: String) -> String {
-    local base: String = String("/tmp")
-    local name: String = String("TMPDIR")
-    local found: Option<String> = env.get(&name)
-    switch found {
-        case Option.Some(v) { base = v.clone() }
-        case Option.None {
-            local alt: String = String("TEMP")
-            local found2: Option<String> = env.get(&alt)
-            switch found2 {
-                case Option.Some(w) { base = w.clone() }
-                case Option.None {}
-            }
+/// The directory for temporary files: `TMPDIR` or `TEMP`, else `/tmp`.
+fn tempDir() -> String {
+    local dir: String = String("/tmp")
+    local names: Vec<String> = Vec<String>()
+    names.push(String("TEMP"))        // Windows
+    names.push(String("TMPDIR"))      // POSIX; read last so it wins when both are set
+    for i in 0..names.length() {
+        local found: Option<String> = env.get(names.get(i))
+        switch found {
+            case Option.Some(v) { dir = v.clone() }
+            case Option.None {}
         }
     }
+    return dir
+}
+
+/// A fresh temporary path with extension `ext`.
+fn tempPath(ext: *String) -> String {
+    local dir: String = tempDir()
     tempCounter += 1
-    return format("{}/xlllvm_{}_{}.{}", &base, processId() as i64, tempCounter, &ext)
+    return format("{}/xlllvm_{}_{}.{}", &dir, processId() as i64, tempCounter, ext)
 }
 
 export class Tools {
@@ -57,90 +60,76 @@ export class Tools {
         local cmd: Command = Command(self.program(&name))
         for i in 0..args.length() { cmd.arg(args.get(i).clone()) }
         local started: Option<ProcessError> = cmd.output()
+        local failure: String = String()
         switch started {
-            case Option.Some(e) { return Result.Err(format("{}: cannot start the tool (error {})", &name, e.code as i64)) }
-            case Option.None {}
-        }
-        if !cmd.status.success {
-            local message: String = format("{} failed with exit code {}", &name, cmd.status.code as i64)
-            if cmd.errText.length() > 0 {
-                message.push(b':')
-                message.push(b'\n')
-                message.append(&cmd.errText)
-            }
-            return Result.Err(message)
-        }
-        return Result.Ok(cmd.outText.clone())
-    }
-
-    /// Writes `ir` to a new temporary `.ll` file; the path, or the error.
-    fn stage(self, ir: *String) -> Result<String, String> {
-        local path: String = tempPath(String("ll"))
-        if !fsWrite(path.cstr(), ir.asStr()) { return Result.Err(format("cannot write {}", &path)) }
-        return Result.Ok(path)
-    }
-
-    /// Checks that `ir` is well-formed IR (syntax, types, dominance); None when it is, otherwise the verifier's message.
-    fn verify(self, ir: *String) -> Option<String> {
-        local staged: Result<String, String> = self.stage(ir)
-        switch staged {
-            case Result.Err(e) { return Option.Some(e) }
-            case Result.Ok(path) {
-                local args: Vec<String> = Vec<String>()
-                args.push(String("-passes=verify"))
-                args.push(String("-disable-output"))
-                args.push(path.clone())
-                local r: Result<String, String> = self.exec(String("opt"), args)
-                fsRemove(path.cstr())
-                switch r {
-                    case Result.Err(e) { return Option.Some(e) }
-                    case Result.Ok(out) { return Option.None }
-                }
-            }
-        }
-    }
-
-    /// `ir` optimized at level 0 to 3 (`opt -O<level>`), as text.
-    fn optimize(self, ir: *String, level: u32) -> Result<String, String> {
-        local staged: Result<String, String> = self.stage(ir)
-        switch staged {
-            case Result.Err(e) { return Result.Err(e) }
-            case Result.Ok(path) {
-                local args: Vec<String> = Vec<String>()
-                args.push(format("-O{}", level as u64))
-                args.push(String("-S"))
-                args.push(path.clone())
-                local r: Result<String, String> = self.exec(String("opt"), args)
-                fsRemove(path.cstr())
-                return r
-            }
-        }
-    }
-
-    /// Runs `tool` over `ir` with an output file of extension `ext` and returns the bytes of that file.
-    fn toFile(self, tool: String, ir: *String, ext: String, extra: Vec<String>) -> Result<String, String> {
-        local staged: Result<String, String> = self.stage(ir)
-        switch staged {
-            case Result.Err(e) { return Result.Err(e) }
-            case Result.Ok(path) {
-                local outPath: String = tempPath(ext)
-                local args: Vec<String> = Vec<String>()
-                for i in 0..extra.length() { args.push(extra.get(i).clone()) }
-                args.push(path.clone())
-                args.push(String("-o"))
-                args.push(outPath.clone())
-                local r: Result<String, String> = self.exec(tool, args)
-                fsRemove(path.cstr())
-                switch r {
-                    case Result.Err(e) { return Result.Err(e) }
-                    case Result.Ok(unused) {
-                        local bytes: String = fsReadAllString(outPath.cstr())
-                        fsRemove(outPath.cstr())
-                        return Result.Ok(bytes)
+            case Option.Some(e) { failure = format("{}: cannot start the tool (error {})", &name, e.code as i64) }
+            case Option.None {
+                if !cmd.status.success {
+                    failure = format("{} failed with exit code {}", &name, cmd.status.code as i64)
+                    if cmd.errText.length() > 0 {
+                        failure.append(":\n")
+                        failure.append(&cmd.errText)
                     }
                 }
             }
         }
+        if failure.length() > 0 { return Result.Err(failure) }
+        return Result.Ok(cmd.outText.clone())
+    }
+
+    /// Writes `ir` to a temporary `.ll` file and runs `tool` as `tool <before...> <file> [-o <out>]`; the tool's standard
+    /// output, or its error. The temporary file is removed.
+    fn runOn(self, tool: String, ir: *String, before: Vec<String>, out: *String) -> Result<String, String> {
+        local ext: String = String("ll")
+        local path: String = tempPath(&ext)
+        if !fsWrite(path.cstr(), ir.asStr()) { return Result.Err(format("cannot write {}", &path)) }
+        local args: Vec<String> = Vec<String>()
+        for i in 0..before.length() { args.push(before.get(i).clone()) }
+        args.push(path.clone())
+        if out.length() > 0 {
+            args.push(String("-o"))
+            args.push(out.clone())
+        }
+        local r: Result<String, String> = self.exec(tool, args)
+        fsRemove(path.cstr())
+        return r
+    }
+
+    /// Checks that `ir` is well-formed IR (syntax, types, dominance); None when it is, otherwise the verifier's message.
+    fn verify(self, ir: *String) -> Option<String> {
+        local before: Vec<String> = Vec<String>()
+        before.push(String("-passes=verify"))
+        before.push(String("-disable-output"))
+        local none: String = String()
+        local r: Result<String, String> = self.runOn(String("opt"), ir, before, &none)
+        local problem: Option<String> = Option.None
+        switch r {
+            case Result.Err(e) { problem = Option.Some(e) }
+            case Result.Ok(o) {}
+        }
+        return problem
+    }
+
+    /// `ir` optimized at level 0 to 3 (`opt -O<level>`), as text.
+    fn optimize(self, ir: *String, level: u32) -> Result<String, String> {
+        local before: Vec<String> = Vec<String>()
+        before.push(format("-O{}", level as u64))
+        before.push(String("-S"))
+        local none: String = String()
+        return self.runOn(String("opt"), ir, before, &none)
+    }
+
+    /// Runs `tool` over `ir`, with `before` arguments and an output file of extension `ext`; the bytes of that file.
+    fn toFile(self, tool: String, ir: *String, ext: String, before: Vec<String>) -> Result<String, String> {
+        local outPath: String = tempPath(&ext)
+        local r: Result<String, String> = self.runOn(tool, ir, before, &outPath)
+        local result: Result<String, String> = Result.Ok(String())
+        switch r {
+            case Result.Err(e) { result = Result.Err(e) }
+            case Result.Ok(o) { result = Result.Ok(fsReadAllString(outPath.cstr())) }
+        }
+        fsRemove(outPath.cstr())
+        return result
     }
 
     /// LLVM bitcode (`.bc`) of `ir`, as bytes.
@@ -149,11 +138,11 @@ export class Tools {
     }
 
     fn codegen(self, ir: *String, kind: String, ext: String, triple: *String, level: u32) -> Result<String, String> {
-        local extra: Vec<String> = Vec<String>()
-        extra.push(format("-filetype={}", &kind))
-        extra.push(format("-O{}", level as u64))
-        if triple.length() > 0 { extra.push(format("-mtriple={}", triple)) }
-        return self.toFile(String("llc"), ir, ext, extra)
+        local before: Vec<String> = Vec<String>()
+        before.push(format("-filetype={}", &kind))
+        before.push(format("-O{}", level as u64))
+        if triple.length() > 0 { before.push(format("-mtriple={}", triple)) }
+        return self.toFile(String("llc"), ir, ext, before)
     }
 
     /// A relocatable object file of `ir` for `triple` (empty: the module's own triple) at optimization level 0 to 3, as bytes.
