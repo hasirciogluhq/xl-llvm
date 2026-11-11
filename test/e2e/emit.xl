@@ -1,19 +1,16 @@
 // Shared by the e2e programs. Each program builds one module through the xl-llvm API and prints its IR text on stdout (with
 // `Module.printTo`); `run.sh` then verifies the text with `opt`, compiles it with `llc` or `clang`, links, runs it and checks the result.
 //
-// The target is the environment variable XL_LLVM_TRIPLE, or the triple of the host when it is not set. The environment, not `argv`,
-// because an `@entry` with parameters needs the `args` role on Windows.
-from "std" import String, Option, Stream, eprint
-from "std/os" import env
+// Usage of a program:  <program> [target-triple]     (no argument: the triple of the host)
+from "std" import String, Option, Stream, eprint, fromC
 import * from "xl-llvm"
 
-/// Sets the target of `m` from XL_LLVM_TRIPLE, or the host triple without it.
-export fn begin(m: *Module) {
-    local name: String = String("XL_LLVM_TRIPLE")
-    local triple: Option<String> = env.get(&name)
-    switch triple {
-        case Option.Some(t) { setTarget(m, t.clone()) }
-        case Option.None { setTarget(m, hostTriple()) }
+/// Sets the target of `m` from `argv[1]`, or the host triple without it.
+export fn begin(m: *Module, argc: i32, argv: **u8) {
+    if argc > 1 {
+        setTarget(m, String(fromC(argv[1])))
+    } else {
+        setTarget(m, hostTriple())
     }
 }
 
