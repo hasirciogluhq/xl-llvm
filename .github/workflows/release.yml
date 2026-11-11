@@ -72,7 +72,10 @@ jobs:
       - name: Read the standard library reference
         id: std
         shell: bash
-        run: echo "ref=$(sed -n 's/^  XL_STD_REF: *//p' .github/workflows/ci.yml | head -1)" >>"$GITHUB_OUTPUT"
+        run: |
+          ref=$(sed -n 's/^  XL_STD_REF: *//p' .github/workflows/ci.yml | head -1)
+          [ -n "$ref" ] || { echo "error: XL_STD_REF not found in ci.yml" >&2; exit 1; }
+          echo "ref=$ref" >>"$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: hasirciogluhq/xl-std
