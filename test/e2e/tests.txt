@@ -1,0 +1,9 @@
+# Native end-to-end table read by test/e2e/run.sh. One entry per line, fields separated by `|`; `#` starts a comment.
+#   run|name|exit status|text the output must contain (empty: any)
+#   cross|name
+#   sym|name|regex the symbol table must match|regex it must not match
+#   tool|name|exit status|text the output must contain
+run|hello|42|
+cross|hello
+run|arith|128|
+cross|arith
