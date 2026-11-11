@@ -43,10 +43,14 @@ import * from "xl-llvm"
     args.push(ctx.constInt(i32t, 2))
     args.push(ctx.constInt(i32t, 3))
     args.push(ctx.constInt(i32t, 4))
-    local nine: Value = b.callFn(add3, args)
+    local nine: Value = b.callFn(add3, args)       // `args` is moved into the call
 
     // the same function through its address
-    local viaPtr: Value = b.call(add3.value(), add3.fnType(), args)
+    local again: Vec<Value> = Vec<Value>()
+    again.push(ctx.constInt(i32t, 2))
+    again.push(ctx.constInt(i32t, 3))
+    again.push(ctx.constInt(i32t, 4))
+    local viaPtr: Value = b.call(add3.value(), add3.fnType(), again)
     local same: Value = b.icmp(IntPred.Eq, nine, viaPtr)
     local say: Vec<Value> = Vec<Value>()
     say.push(fmtPtr)

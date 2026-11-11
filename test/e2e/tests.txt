@@ -19,8 +19,8 @@ run|atomics|20|
 cross|atomics
 run|asm|42|
 cross|asm
-run|linkage|9|
-sym|linkage|[Tt] .*main$|[TtDd] .*(helper|secret)$
-sym|linkage|[Ww] .*weakFn$|
+run|linkage|13|
+sym|linkage|T .*main$|[TD] .*(helper|secret)$
+sym|linkage|T .*exported$|
 cross|linkage
 tool|tools|0|tools ok

@@ -1,5 +1,6 @@
 // Linkage, visibility and attributes have no run-time effect, so the symbol table of the object file is checked (llvm-nm):
-//   `main` and `exported` are external, `helper` is internal (not in the global symbols), `weakFn` is weak, `table` is a global.
+//   `main` and `exported` are external, `helper` and `secret` are internal (local symbols, never `T` or `D`), `weakFn` is weak.
+// `main` returns 13: exported() = helper() 5 + table 3 = 8, plus weakFn() 1 plus hiddenTable 4.
 from "std" import String, Vec
 from "emit" import begin, finish
 import * from "xl-llvm"

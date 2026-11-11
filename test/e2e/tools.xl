@@ -59,7 +59,12 @@ fn module(ctx: *Context, m: *Module) {
 
     local bitcode: Result<String, String> = tools.bitcode(&text)
     switch bitcode {
-        case Result.Ok(s) { failures += check(s.length() > 4 && s.at(0) == b'B' && s.at(1) == b'C', "bitcode starts with the BC magic") }
+        case Result.Ok(s) {
+            // raw bitcode starts with 'B' 'C'; for Apple triples LLVM writes the wrapper header 0x0B17C0DE (little endian: DE C0 17 0B)
+            local raw: bool = s.length() > 4 && s.at(0) == b'B' && s.at(1) == b'C'
+            local wrapped: bool = s.length() > 4 && s.at(0) == 0xDE && s.at(1) == 0xC0 && s.at(2) == 0x17 && s.at(3) == 0x0B
+            failures += check(raw || wrapped, "bitcode starts with the BC magic or the wrapper header")
+        }
         case Result.Err(e) { failures += check(false, "bitcode runs llvm-as") }
     }
 
