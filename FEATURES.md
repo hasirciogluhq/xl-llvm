@@ -39,4 +39,6 @@ One row per supported IR feature. A row is `done` only when both its unit test (
 | Output to a stream or a file | | `Module.printTo`, `printToFile` | n/a | `tools.xl` | done |
 | Differential: the same programs written in xlang and built by `xlc` behave like the IR built here (exit status and output) | | `test/e2e/ref/` | n/a | `arith.xl`, `control.xl`, `floats.xl`, `memory.xl`, `calls.xl` | done |
 
+**Windows.** Unit tests and the type-check pass on Windows; the e2e run there is partial and not yet green, so CI does not gate on it.
+
 Not supported (no API, no row): `volatile` and atomic `load` / `store`, fast-math flags, `tail` calls, integers wider than 64 bits, vectors, `fp128` and `x86_fp80`, `invoke` and exception-handling personalities. Adding one is a new row with both tests.

@@ -105,6 +105,8 @@ jobs:
   e2e:
     name: e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Windows e2e is partial: it does not gate a release (see FEATURES.md); the other legs do.
+    continue-on-error: ${{ matrix.os == 'windows-2025' }}
     strategy:
       fail-fast: false
       matrix:
