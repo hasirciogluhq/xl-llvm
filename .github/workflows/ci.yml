@@ -62,8 +62,8 @@ jobs:
           - aarch64-apple-darwin
           - x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: hasirciogluhq/xl-std
           ref: ${{ env.XL_STD_REF }}
@@ -79,7 +79,7 @@ jobs:
     name: features table
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: test/features.sh
 
   # Unit suites build against the package and run natively on each host. They are platform independent: every host must give the
@@ -95,8 +95,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: hasirciogluhq/xl-std
           ref: ${{ env.XL_STD_REF }}
@@ -125,8 +125,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: hasirciogluhq/xl-std
           ref: ${{ env.XL_STD_REF }}
@@ -143,8 +143,8 @@ jobs:
     name: consume as a package
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: hasirciogluhq/xl-std
           ref: ${{ env.XL_STD_REF }}

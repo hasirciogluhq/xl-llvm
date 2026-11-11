@@ -65,7 +65,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.meta.outputs.tag }}
       # The standard library the archive is verified against: the same one the tests ran with (XL_STD_REF in ci.yml).
@@ -76,7 +76,7 @@ jobs:
           ref=$(sed -n 's/^  XL_STD_REF: *//p' .github/workflows/ci.yml | head -1)
           [ -n "$ref" ] || { echo "error: XL_STD_REF not found in ci.yml" >&2; exit 1; }
           echo "ref=$ref" >>"$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: hasirciogluhq/xl-std
           ref: ${{ steps.std.outputs.ref }}
