@@ -22,3 +22,6 @@
 dist/
 xlang_e2e.*
 e2e-runner
+
+# The standard library checked out beside the package in CI
+xl-std/

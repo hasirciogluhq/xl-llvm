@@ -1,7 +1,9 @@
 name: release
 
 # Publishes a release when a version tag is pushed. The package is versioned by git tags (`xlang-docs/compiler/packages.md`), so the
-# tag itself is the release; this workflow tests it, then attaches a source archive and its checksum to a GitHub release.
+# tag itself is the release; this workflow runs the whole of ci.yml (type-check, features table, unit and e2e tests on every host,
+# consumer build) on the tagged commit, then attaches a source archive and its checksum to a GitHub release. Nothing is published
+# unless every job passes.
 #
 # Tags: vMAJOR.MINOR.PATCH is a stable release; a tag with a suffix after `-` (v1.2.0-rc.1, v1.2.0-test) is marked a pre-release.
 # Can also be re-run for an existing tag from the Actions tab.
@@ -66,6 +68,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.meta.outputs.tag }}
+      # The standard library the archive is verified against: the same one the tests ran with (XL_STD_REF in ci.yml).
+      - name: Read the standard library reference
+        id: std
+        shell: bash
+        run: echo "ref=$(sed -n 's/^  XL_STD_REF: *//p' .github/workflows/ci.yml | head -1)" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: hasirciogluhq/xl-std
+          ref: ${{ steps.std.outputs.ref }}
+          path: xl-std
       - name: Source archive
         shell: bash
         env:
@@ -93,7 +105,7 @@ jobs:
           .github/scripts/install-xlc.sh
           mkdir -p verify
           tar -xzf "dist/xl-llvm_${VERSION}.tar.gz" -C verify
-          xlc test/consume/main.xl -M xl-llvm="$PWD/verify/xl-llvm_${VERSION}" -DfeatureDefaultAllocator=true -o verify/consume
+          xlc test/consume/main.xl -M xl-llvm="$PWD/verify/xl-llvm_${VERSION}" -M std="$PWD/xl-std" --import std -DfeatureDefaultAllocator=true -o verify/consume
           ./verify/consume
       - name: Create the release
         shell: bash
