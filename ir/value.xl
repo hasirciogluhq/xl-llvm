@@ -22,6 +22,7 @@ export enum ValueKind: i32 {
     Arg           // a function argument; owner: the function, aux: the position
     Inst          // an instruction result; owner: the function, aux: the block, index: the instruction
     InlineAsm     // name: the template; the constraints are in `text`
+    MdOperand     // `metadata ...` operand of an intrinsic: aux 0, ops: [value] wraps a value; aux 1, ops: [node] names a metadata node
 }
 
 /// A handle to a value of one `Context`.

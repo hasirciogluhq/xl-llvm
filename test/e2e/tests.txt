@@ -3,6 +3,7 @@
 #   cross|name
 #   sym|name|regex the symbol table must match|regex it must not match
 #   tool|name|exit status|text the output must contain
+#   diff|name   the program built by xl-llvm must behave like ref/<name>.xl built by xlc (exit status and output)
 run|hello|42|
 cross|hello
 run|arith|128|
@@ -19,8 +20,15 @@ run|atomics|20|
 cross|atomics
 run|asm|42|
 cross|asm
+run|debug|42|
+cross|debug
 run|linkage|13|
 sym|linkage|T .*main$|[TD] .*(helper|secret)$
 sym|linkage|T .*exported$|
 cross|linkage
 tool|tools|0|tools ok
+diff|arith
+diff|control
+diff|floats
+diff|memory
+diff|calls

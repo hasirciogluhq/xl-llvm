@@ -1,0 +1,11 @@
+// Reference for e2e/control: a switch and a second jump, written in xlang and compiled by xlc.
+@entry fn main() -> i32 {
+    local v: i32 = 3
+    local r: i32 = 0
+    switch v {
+        case 1 { r = 10 }
+        case 3 { r = 30 }
+        default { r = 99 }
+    }
+    return r + 7
+}

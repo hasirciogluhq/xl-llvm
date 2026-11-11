@@ -4,12 +4,13 @@
 // `Module`, `Function` and `Block` are classes whose handles stay valid while the module lives: a `Function` is a (module,
 // index) pair, so adding more functions never invalidates one. Functions may be declared before they are defined and built in
 // any order; names and numbers are assigned by the printer, never by build order.
-from "std" import String, Vec, Result, format
+from "std" import String, Vec, Option, Result, Stream, format, fsWrite
 from "../printer/printer" import printModule
 from "types" import Type, TypeKind
 from "value" import Value, ValueKind, ValueData, NoValue, GlobalData, Linkage, Visibility, ThreadLocal, UnnamedAddr, FnAttr
 from "inst" import Inst, Op
 from "context" import Context
+from "metadata" import Md, Metadata
 
 // https://llvm.org/docs/LangRef.html#module-flags-metadata
 export enum FlagBehavior: i32 {
@@ -23,10 +24,10 @@ export enum FlagBehavior: i32 {
     Min = 8
 }
 
-export class ModuleFlag {
-    behavior: FlagBehavior
-    key: String
-    value: i64          // an `i32` flag value
+/// A named metadata list such as `!llvm.module.flags = !{!0, !1}`: https://llvm.org/docs/LangRef.html#named-metadata
+export class NamedMetadata {
+    name: String
+    nodes: Vec<u32>
 }
 
 export class BlockData {
@@ -45,6 +46,8 @@ export class FunctionData {
     attrs: Vec<FnAttr>
     align: u32
     section: String
+    hasDbg: bool                // `!dbg` names a DISubprogram
+    dbg: u32
 }
 
 export class Module {
@@ -54,7 +57,7 @@ export class Module {
     dataLayout: String          // empty: none printed
     globals: Vec<GlobalData>
     funcs: Vec<FunctionData>
-    flags: Vec<ModuleFlag>
+    named: Vec<NamedMetadata>
 
     fn init(self, ctx: *Context, name: String) {
         self.ctx = ctx
@@ -66,6 +69,33 @@ export class Module {
         return printModule(self)
     }
 
+    /// Writes the module as `.ll` text to `out` (a pipe, a file or standard output wrapped in a `Stream`); None on success, otherwise
+    /// the first recorded error or the failure to write.
+    fn printTo(self, out: *Stream) -> Option<String> {
+        local r: Result<String, String> = printModule(self)
+        local problem: Option<String> = Option.None
+        switch r {
+            case Result.Err(e) { problem = Option.Some(e.clone()) }      // a payload bound by `switch` is a copy: clone to keep it
+            case Result.Ok(s) {
+                if !out.write(&s) { problem = Option.Some(String("printTo: the write failed")) }
+            }
+        }
+        return problem
+    }
+
+    /// Writes the module to the file `path`, created or truncated; None on success, otherwise the error.
+    fn printToFile(self, path: *String) -> Option<String> {
+        local r: Result<String, String> = printModule(self)
+        local problem: Option<String> = Option.None
+        switch r {
+            case Result.Err(e) { problem = Option.Some(e.clone()) }
+            case Result.Ok(s) {
+                if !fsWrite(path.cstr(), s.asStr()) { problem = Option.Some(format("printToFile: cannot write {}", path)) }
+            }
+        }
+        return problem
+    }
+
     fn setTriple(self, triple: String) {
         self.triple = triple
     }
@@ -74,10 +104,30 @@ export class Module {
         self.dataLayout = layout
     }
 
+    /// Appends `node` to the named metadata `name` (`!name = !{!0, !1}`), creating the list on first use.
+    fn addNamed(self, name: String, node: Md) {
+        for i in 0..self.named.length() {
+            local n: *NamedMetadata = self.named.get(i)
+            if n.name.equals(&name) {
+                n.nodes.push(node.id)
+                return
+            }
+        }
+        local n: NamedMetadata = NamedMetadata()
+        n.name = name
+        n.nodes.push(node.id)
+        self.named.push(n)
+    }
+
     /// Adds `!{i32 behavior, !"key", i32 value}` to `!llvm.module.flags`.
     fn addFlag(self, behavior: FlagBehavior, key: String, value: i64) {
-        local f: ModuleFlag = ModuleFlag { behavior: behavior, key: key, value: value }
-        self.flags.push(f)
+        local md: Metadata = Metadata(self.ctx)
+        local i32t: Type = self.ctx.int32()
+        local parts: Vec<Md> = Vec<Md>()
+        parts.push(md.value(self.ctx.constInt(i32t, behavior as i64)))
+        parts.push(md.text(key))
+        parts.push(md.value(self.ctx.constInt(i32t, value)))
+        self.addNamed(String("llvm.module.flags"), md.tuple(parts))
     }
 
     // ---- globals: https://llvm.org/docs/LangRef.html#global-variables ----
@@ -215,6 +265,12 @@ export class Function {
     fn setVisibility(self, v: Visibility) { self.data().visibility = v }
     fn addAttr(self, a: FnAttr) { self.data().attrs.push(a) }
     fn setAlign(self, align: u32) { self.data().align = align }
+
+    /// Attaches the DISubprogram `sp` as `!dbg` of the definition.
+    fn setSubprogram(self, sp: Md) {
+        self.data().hasDbg = true
+        self.data().dbg = sp.id
+    }
     fn setSection(self, section: String) { self.data().section = section }
 }
 

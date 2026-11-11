@@ -15,6 +15,7 @@ export enum TypeKind: i32 {
     Struct     // https://llvm.org/docs/LangRef.html#structure-type
     Func       // https://llvm.org/docs/LangRef.html#function-type
     Label      // the type of a basic block operand
+    Metadata   // the type of a metadata operand of an intrinsic call: https://llvm.org/docs/LangRef.html#metadata-type
 }
 
 /// A handle to a type of one `Context`.

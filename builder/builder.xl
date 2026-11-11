@@ -11,6 +11,7 @@ from "../ir/types" import Type, TypeKind
 from "../ir/value" import Value, ValueKind, ValueData, NoValue
 from "../ir/inst" import Inst, Op, BinOp, CastOp, IntPred, FloatPred, AtomicOp, AtomicOrdering, FlagNuw, FlagNsw, FlagExact
 from "../ir/context" import Context
+from "../ir/metadata" import Md
 from "../ir/module" import Module, Function, Block, BlockData, FunctionData, isTerminator
 
 export class Builder {
@@ -19,9 +20,21 @@ export class Builder {
     func: u32
     block: u32
     placed: bool        // false until `setInsertPoint`
+    loc: u32            // the DILocation node given to new instructions, NoValue for none
 
     fn init(self, ctx: *Context) {
         self.ctx = ctx
+        self.loc = NoValue
+    }
+
+    /// Every instruction built from now on carries `!dbg` `loc` (a DILocation, see debug/debug.xl).
+    fn setDebugLocation(self, loc: Md) {
+        self.loc = loc.id
+    }
+
+    /// Instructions built from now on carry no location.
+    fn clearDebugLocation(self) {
+        self.loc = NoValue
     }
 
     /// Appends the following instructions to the end of `b`.
@@ -71,6 +84,7 @@ export class Builder {
             result = self.ctx.addValue(d)
         }
         i.result = result.id
+        i.dbg = self.loc
         b.insts.push(i)
         return result
     }

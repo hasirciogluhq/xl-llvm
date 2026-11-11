@@ -9,6 +9,7 @@ from "std" import String, Vec, format, toString
 from "types" import Type, TypeKind, TypeData, MaxIntBits
 from "value" import Value, ValueKind, ValueData, NoValue
 from "inst" import Inst
+from "metadata" import MdData
 
 /// Whether the raw ids `a` are the ids of the types `b`, in order.
 fn sameIds(a: *Vec<u32>, b: *Vec<Type>) -> bool {
@@ -22,6 +23,7 @@ fn sameIds(a: *Vec<u32>, b: *Vec<Type>) -> bool {
 export class Context {
     types: Vec<TypeData>
     values: Vec<ValueData>
+    md: Vec<MdData>
     failed: bool
     error: String           // the first recorded error, empty until `failed`
 
@@ -65,6 +67,13 @@ export class Context {
             if self.types.get(i).kind == TypeKind.Label { return Type { id: i as u32 } }
         }
         return self.add(TypeData(TypeKind.Label))
+    }
+
+    fn metadataType(self) -> Type {
+        for i in 0..self.types.length() {
+            if self.types.get(i).kind == TypeKind.Metadata { return Type { id: i as u32 } }
+        }
+        return self.add(TypeData(TypeKind.Metadata))
     }
 
     fn ptr(self) -> Type {

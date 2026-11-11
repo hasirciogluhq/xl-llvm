@@ -9,13 +9,15 @@ from "../ir/types" import Type, TypeKind, TypeData
 from "../ir/value" import Value, ValueKind, ValueData, NoValue, GlobalData, Linkage
 from "../ir/inst" import Inst, Op, BinOp, CastOp, IntPred, FloatPred, AtomicOp, AtomicOrdering, FlagNuw, FlagNsw, FlagExact, FlagDisjoint
 from "../ir/context" import Context
-from "../ir/module" import Module, FunctionData, BlockData, ModuleFlag, isTerminator
+from "../ir/module" import Module, FunctionData, BlockData, NamedMetadata, isTerminator
+from "../ir/metadata" import MdData, MdKind, MdField, MdFieldKind
 from "syntax" import appendInt, appendUInt, appendHex64, appendName, appendIdent, appendQuoted, appendCString, appendLinkage, appendVisibility, appendThreadLocal, appendUnnamedAddr, appendFnAttr, appendBinOp, appendCastOp, appendIntPred, appendFloatPred, appendAtomicOp, appendOrdering
 
 class Printer {
     ctx: *Context
     mod: *Module
     out: String
+    order: Vec<u32>     // the numbered metadata nodes; a node's number is its index here
 
     fn init(self, mod: *Module) {
         self.mod = mod
@@ -29,6 +31,7 @@ class Printer {
         switch d.kind {
             case TypeKind.Void { self.out.append("void") }
             case TypeKind.Label { self.out.append("label") }
+            case TypeKind.Metadata { self.out.append("metadata") }
             case TypeKind.Ptr { self.out.append("ptr") }
             case TypeKind.Int {
                 self.out.push(b'i')
@@ -136,7 +139,130 @@ class Printer {
                 self.out.append(", ")
                 appendQuoted(&self.out, &d.text)
             }
+            case ValueKind.MdOperand {
+                if d.aux == 0 {
+                    self.typed(*d.ops.get(0))       // `metadata ptr %x`: the type is printed before this
+                } else {
+                    self.mdRef(*d.ops.get(0))
+                }
+            }
         }
+    }
+
+    // ---- metadata: https://llvm.org/docs/LangRef.html#metadata ----
+
+    /// Gives `id` a number at its first use. Strings and wrapped values are printed in place and need none.
+    fn useMd(self, id: u32) {
+        local d: *MdData = self.ctx.md.get(id as usize)
+        if d.slot >= 0 || d.kind == MdKind.Str || d.kind == MdKind.Value || d.kind == MdKind.Null { return }
+        d.slot = self.order.length() as i64
+        self.order.push(id)
+    }
+
+    /// Numbers every node reachable from the module: named metadata first, then function and instruction uses in definition
+    /// order, then the nodes those refer to (breadth first), so equal builds number equally.
+    fn numberMetadata(self) {
+        for k in 0..self.ctx.md.length() { self.ctx.md.get(k).slot = -1 }
+        local m: *Module = self.mod
+        for k in 0..m.named.length() {
+            local n: *NamedMetadata = m.named.get(k)
+            for j in 0..n.nodes.length() { self.useMd(*n.nodes.get(j)) }
+        }
+        for f in 0..m.funcs.length() {
+            local fd: *FunctionData = m.funcs.get(f)
+            if fd.hasDbg { self.useMd(fd.dbg) }
+            for b in 0..fd.blocks.length() {
+                local blk: *BlockData = fd.blocks.get(b)
+                for k in 0..blk.insts.length() {
+                    local i: *Inst = blk.insts.get(k)
+                    if i.dbg != NoValue { self.useMd(i.dbg) }
+                    for j in 0..i.ops.length() {
+                        local o: *ValueData = self.ctx.values.get(*i.ops.get(j) as usize)
+                        if o.kind == ValueKind.MdOperand && o.aux == 1 { self.useMd(*o.ops.get(0)) }
+                    }
+                }
+            }
+        }
+        local at: usize = 0
+        while at < self.order.length() {
+            local d: *MdData = self.ctx.md.get(*self.order.get(at) as usize)
+            for j in 0..d.elems.length() { self.useMd(*d.elems.get(j)) }
+            for j in 0..d.fields.length() {
+                local fl: *MdField = d.fields.get(j)
+                if fl.kind == MdFieldKind.Node { self.useMd(fl.node) }
+            }
+            at += 1
+        }
+    }
+
+    /// A node as an element or an operand: `!N`, `!"text"`, or `i32 5`.
+    fn mdRef(self, id: u32) {
+        local d: *MdData = self.ctx.md.get(id as usize)
+        switch d.kind {
+            case MdKind.Str {
+                self.out.append("!")
+                appendQuoted(&self.out, &d.text)
+            }
+            case MdKind.Value { self.typed(d.value) }
+            case MdKind.Null { self.out.append("null") }
+            default {
+                self.out.push(b'!')
+                appendInt(&self.out, d.slot)
+            }
+        }
+    }
+
+    /// `!N = ...` of a numbered node.
+    fn mdDef(self, d: *MdData) {
+        self.out.push(b'!')
+        appendInt(&self.out, d.slot)
+        self.out.append(" = ")
+        if d.kind == MdKind.Tuple {
+            self.out.append("!{")
+            for k in 0..d.elems.length() {
+                if k > 0 { self.out.append(", ") }
+                self.mdRef(*d.elems.get(k))
+            }
+            self.out.append("}\n")
+            return
+        }
+        if d.distinct { self.out.append("distinct ") }
+        self.out.push(b'!')
+        self.out.append(d.text.asStr())
+        self.out.push(b'(')
+        for k in 0..d.fields.length() {
+            local f: *MdField = d.fields.get(k)
+            if k > 0 { self.out.append(", ") }
+            self.out.append(f.name.asStr())
+            self.out.append(": ")
+            switch f.kind {
+                case MdFieldKind.Int { appendInt(&self.out, f.num) }
+                case MdFieldKind.Word { self.out.append(f.text.asStr()) }
+                case MdFieldKind.Str { appendQuoted(&self.out, &f.text) }
+                case MdFieldKind.Node { self.mdRef(f.node) }
+                case MdFieldKind.Bool { self.out.append(f.num != 0 ? "true" : "false") }
+                case MdFieldKind.Null { self.out.append("null") }
+            }
+        }
+        self.out.append(")\n")
+    }
+
+    fn metadata(self) {
+        local m: *Module = self.mod
+        if m.named.length() == 0 && self.order.length() == 0 { return }
+        self.out.push(b'\n')
+        for k in 0..m.named.length() {
+            local n: *NamedMetadata = m.named.get(k)
+            self.out.push(b'!')
+            self.out.append(n.name.asStr())
+            self.out.append(" = !{")
+            for j in 0..n.nodes.length() {
+                if j > 0 { self.out.append(", ") }
+                self.mdRef(*n.nodes.get(j))
+            }
+            self.out.append("}\n")
+        }
+        for k in 0..self.order.length() { self.mdDef(self.ctx.md.get(*self.order.get(k) as usize)) }
     }
 
     /// `%name` or `%N` of an argument or an instruction result.
@@ -422,6 +548,10 @@ class Printer {
                 appendOrdering(&self.out, i.order)
             }
         }
+        if i.dbg != NoValue {
+            self.out.append(", !dbg ")
+            self.mdRef(i.dbg)
+        }
         self.out.push(b'\n')
     }
 
@@ -467,6 +597,10 @@ class Printer {
         if isDecl {
             self.out.push(b'\n')
             return
+        }
+        if fd.hasDbg {
+            self.out.append(" !dbg ")
+            self.mdRef(fd.dbg)
         }
         self.out.append(" {\n")
         for b in 0..fd.blocks.length() {
@@ -514,6 +648,7 @@ class Printer {
 
     fn run(self) {
         local m: *Module = self.mod
+        self.numberMetadata()
         self.out.append("; ModuleID = ")
         appendQuoted(&self.out, &m.name)
         self.out.append("\nsource_filename = ")
@@ -556,26 +691,7 @@ class Printer {
             self.out.push(b'\n')
             self.function(m.funcs.get(k))
         }
-        if m.flags.length() > 0 {
-            self.out.append("\n!llvm.module.flags = !{")
-            for k in 0..m.flags.length() {
-                self.out.append(k == 0 ? "!" : ", !")
-                appendUInt(&self.out, k as u64)
-            }
-            self.out.append("}\n")
-            for k in 0..m.flags.length() {
-                local f: *ModuleFlag = m.flags.get(k)
-                self.out.push(b'!')
-                appendUInt(&self.out, k as u64)
-                self.out.append(" = !{i32 ")
-                appendInt(&self.out, f.behavior as i64)
-                self.out.append(", !")
-                appendQuoted(&self.out, &f.key)
-                self.out.append(", i32 ")
-                appendInt(&self.out, f.value)
-                self.out.append("}\n")
-            }
-        }
+        self.metadata()
     }
 }
 

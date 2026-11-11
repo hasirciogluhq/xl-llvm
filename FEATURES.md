@@ -34,9 +34,9 @@ One row per supported IR feature. A row is `done` only when both its unit test (
 | Builder checks: operand types, `call` arguments, `ret`, one terminator per block, every block terminated | [Verifier](https://llvm.org/docs/LangRef.html#verifier) | `Context.fail`, `Module.print` | `control.test.xl`, `binary.test.xl` | `tools.xl` | done |
 | Verify with `opt`, optimize with `opt -O<n>` | [opt](https://llvm.org/docs/CommandGuide/opt.html) | `Tools.verify`, `Tools.optimize` | n/a | `tools.xl` | done |
 | Bitcode, object and assembly output (`llvm-as`, `llc`), compile-only legs for other triples | [llc](https://llvm.org/docs/CommandGuide/llc.html) | `Tools.bitcode`, `object`, `assembly` | n/a | `tools.xl` | done |
-| Debug info: `DIBuilder`, `DIFile`, `DICompileUnit`, `DILocation` | [Debug info](https://llvm.org/docs/SourceLevelDebugging.html) | | | | todo |
-| Generic metadata nodes and attachments | [Metadata](https://llvm.org/docs/LangRef.html#metadata) | | | | todo |
-| `volatile` and atomic `load` / `store`, fast-math flags, `tail` calls | [load](https://llvm.org/docs/LangRef.html#load-instruction) | | | | todo |
-| Integers wider than 64 bits, vectors, `fp128`, `x86_fp80` | [Type system](https://llvm.org/docs/LangRef.html#type-system) | | | | todo |
-| `invoke`, `landingpad`, exception-handling personalities | [Exception handling](https://llvm.org/docs/ExceptionHandling.html) | | | | todo |
-| Differential test: the same programs through `xlc` (C++ LLVM) and through xl-llvm behave the same | | | | | todo |
+| Metadata: strings, tuples, specialized nodes (`!Kind(field: value)`), named metadata, module flags, `metadata` call operands | [Metadata](https://llvm.org/docs/LangRef.html#metadata) | `Metadata`, `Module.addNamed`, `addFlag` | `metadata.test.xl` | `debug.xl` | done |
+| Debug info: `DIFile`, `DICompileUnit`, `DIBasicType`, `DISubprogram`, `DILocalVariable`, `DILocation`, `llvm.dbg.declare`, `!dbg` on instructions | [Debug info](https://llvm.org/docs/SourceLevelDebugging.html) | `DIBuilder`, `Builder.setDebugLocation`, `Function.setSubprogram` | `debug.test.xl` | `debug.xl` | done |
+| Output to a stream or a file | | `Module.printTo`, `printToFile` | n/a | `tools.xl` | done |
+| Differential: the same programs written in xlang and built by `xlc` behave like the IR built here (exit status and output) | | `test/e2e/ref/` | n/a | `arith.xl`, `control.xl`, `floats.xl`, `memory.xl`, `calls.xl` | done |
+
+Not supported (no API, no row): `volatile` and atomic `load` / `store`, fast-math flags, `tail` calls, integers wider than 64 bits, vectors, `fp128` and `x86_fp80`, `invoke` and exception-handling personalities. Adding one is a new row with both tests.

@@ -9,6 +9,7 @@
 # tests.txt says what to do with it; fields are separated by `|`, `#` starts a comment:
 #   run|name|exit status|text the output must contain   verify with `opt`, build with clang (-O0), link, run, check status and output
 #   cross|name                                          verify and compile to an object for every triple in `triples` (no run)
+#   diff|name                                           like run, then compare exit status and output with ref/<name>.xl built by xlc
 #   sym|name|present regex|absent regex                 compile to an object and check the symbol table with llvm-nm (not on Windows)
 #   tool|name|exit status|text the output must contain  run the xlang program itself: it drives the tools of xl-llvm
 set -u
@@ -68,6 +69,19 @@ while IFS='|' read -r kind name a b || [ -n "$kind" ]; do
         if ! out=$(llc -mtriple="$triple" -filetype=obj "$ll" -o "$work/$name.$triple.o" 2>&1); then bad "$label ($triple)" "llc" "$out"; leg_ok=0; continue; fi
       done
       [ "$leg_ok" = 1 ] && ok "$label"
+      ;;
+    diff)
+      # The reference program in ref/ is compiled by xlc itself; the IR program built by xl-llvm must behave the same.
+      if ! "$xlc" "$here/ref/$name.xl" -M "std=$std" --import std -DfeatureDefaultAllocator=true -o "$work/$name.ref$exe" 2>"$work/$name.refbuild"; then bad "$label" "reference build" "$(cat "$work/$name.refbuild")"; continue; fi
+      msg=$(emit "$name") || { bad "$label" "emit" "$msg"; continue; }
+      if ! out=$(opt -passes=verify -disable-output "$work/$name.ll" 2>&1); then bad "$label" "opt -passes=verify rejected the text" "$out"; continue; fi
+      if ! out=$("$clang" -O0 -Wno-override-module "$work/$name.ll" -o "$work/$name.bin$exe" 2>&1); then bad "$label" "clang" "$out"; continue; fi
+      want=$("$work/$name.ref$exe" 2>&1); wantCode=$?
+      got=$("$work/$name.bin$exe" 2>&1); code=$?
+      if [ "$code" != "$wantCode" ]; then bad "$label" "exit status $code, xlc gives $wantCode" "$got"; continue; fi
+      if [ "$got" != "$want" ]; then bad "$label" "output differs from xlc's" "xl-llvm: $got
+xlc:     $want"; continue; fi
+      ok "$label"
       ;;
     sym)
       if [ -n "$exe" ]; then echo "skip [$label] (symbol table check is not run on Windows)"; continue; fi

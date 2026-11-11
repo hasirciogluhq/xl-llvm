@@ -1,0 +1,9 @@
+// Reference for e2e/floats: 1.5 * 4.0 + 1.0 in double and in float; 7 when both agree.
+@entry fn main() -> i32 {
+    local d: f64 = 1.5
+    d = d * 4.0 + 1.0
+    local s: f32 = 1.5
+    s = s * 4.0 + 1.0
+    local back: f64 = s as f64
+    return (d == back) ? (d as i32) : 0
+}

@@ -1,0 +1,159 @@
+// ir/metadata: metadata nodes, https://llvm.org/docs/LangRef.html#metadata
+//
+// A metadata node is data: a string, a tuple, a wrapped value, or a "specialized" node such as `!DIFile(filename: "a.xl", ...)`
+// made of named fields. Specialized nodes are generic on purpose: the printer knows the shape `!Kind(name: value, ...)` once, and the
+// debug-info builder (debug/debug.xl) says which kinds and fields exist, so a new DI node needs no printer change. Nodes are numbered
+// (`!0`, `!1`, ...) by the printer in order of first use, never by creation order.
+from "std" import String, Vec
+from "types" import Type
+from "value" import Value, ValueKind, ValueData, NoValue
+from "context" import Context
+
+export enum MdKind: i32 {
+    Str          // `!"text"`
+    Tuple        // `!{ elems... }`
+    Value        // a constant as a node element: `i32 5`
+    Special      // `!Kind(field: value, ...)`
+    Null         // `null`, an absent element (the `void` return type of a DISubroutineType)
+}
+
+export enum MdFieldKind: i32 {
+    Int          // a decimal number
+    Word         // a bare word such as `DW_LANG_C99`, `DIFlagPrototyped` or `DW_ATE_signed`
+    Str          // a quoted string
+    Node         // a reference to another node, `!N`
+    Bool         // `true` or `false`
+    Null         // `null`
+}
+
+/// A handle to a metadata node of one `Context`.
+export struct Md {
+    id: u32
+}
+
+export class MdField {
+    name: String
+    kind: MdFieldKind
+    num: i64          // Int: the number; Bool: 0 or 1
+    text: String      // Word and Str: the text
+    node: u32         // Node: the referenced node
+}
+
+export class MdData {
+    kind: MdKind
+    text: String      // Str: the text; Special: the kind name (`DIFile`)
+    distinct: bool    // Special: printed `distinct !Kind(...)`
+    elems: Vec<u32>   // Tuple: the nodes
+    fields: Vec<MdField>
+    value: u32        // Value: the constant
+    slot: i64         // the number the printer gave the node, -1 for none
+
+    fn init(self, kind: MdKind) {
+        self.kind = kind
+        self.value = NoValue
+        self.slot = -1
+    }
+}
+
+/// Builds metadata nodes of one context.
+export class Metadata {
+    ctx: *Context
+
+    fn init(self, ctx: *Context) {
+        self.ctx = ctx
+    }
+
+    fn add(self, d: MdData) -> Md {
+        self.ctx.md.push(d)
+        return Md { id: (self.ctx.md.length() - 1) as u32 }
+    }
+
+    /// `!"text"`
+    fn text(self, text: String) -> Md {
+        local d: MdData = MdData(MdKind.Str)
+        d.text = text
+        return self.add(d)
+    }
+
+    /// `null` as an element of a tuple.
+    fn null(self) -> Md {
+        return self.add(MdData(MdKind.Null))
+    }
+
+    /// A constant as an element of a tuple: `i32 5`.
+    fn value(self, v: Value) -> Md {
+        local d: MdData = MdData(MdKind.Value)
+        d.value = v.id
+        return self.add(d)
+    }
+
+    /// `!{ a, b, ... }`
+    fn tuple(self, elems: Vec<Md>) -> Md {
+        local d: MdData = MdData(MdKind.Tuple)
+        for i in 0..elems.length() { d.elems.push(elems.get(i).id) }
+        return self.add(d)
+    }
+
+    /// An empty specialized node `!kind()`; give it fields with the `set...` calls. `distinct` marks a node that is never merged
+    /// with an equal one (compile units, subprograms).
+    fn special(self, kind: String, distinct: bool) -> Md {
+        local d: MdData = MdData(MdKind.Special)
+        d.text = kind
+        d.distinct = distinct
+        return self.add(d)
+    }
+
+    fn field(self, node: Md, name: String, kind: MdFieldKind) -> *MdField {
+        local d: *MdData = self.ctx.md.get(node.id as usize)
+        local f: MdField = MdField()
+        f.name = name
+        f.kind = kind
+        d.fields.push(f)
+        return d.fields.last()
+    }
+
+    fn setInt(self, node: Md, name: String, v: i64) {
+        local f: *MdField = self.field(node, name, MdFieldKind.Int)    // not `self.field(...).num = v`: the call would run twice
+        f.num = v
+    }
+
+    fn setBool(self, node: Md, name: String, v: bool) {
+        local f: *MdField = self.field(node, name, MdFieldKind.Bool)
+        f.num = v ? 1 : 0
+    }
+
+    fn setWord(self, node: Md, name: String, word: String) {
+        local f: *MdField = self.field(node, name, MdFieldKind.Word)
+        f.text = word
+    }
+
+    fn setString(self, node: Md, name: String, text: String) {
+        local f: *MdField = self.field(node, name, MdFieldKind.Str)
+        f.text = text
+    }
+
+    fn setNode(self, node: Md, name: String, other: Md) {
+        local f: *MdField = self.field(node, name, MdFieldKind.Node)
+        f.node = other.id
+    }
+
+    fn setNull(self, node: Md, name: String) {
+        self.field(node, name, MdFieldKind.Null)
+    }
+
+    /// `metadata ptr %x` as an argument of an intrinsic such as `llvm.dbg.declare`: the value wrapped as metadata.
+    fn operand(self, v: Value) -> Value {
+        local d: ValueData = ValueData(ValueKind.MdOperand, self.ctx.metadataType().id)
+        d.aux = 0
+        d.ops.push(v.id)
+        return self.ctx.addValue(d)
+    }
+
+    /// `metadata !N` as an argument of an intrinsic: a reference to a node.
+    fn operandNode(self, node: Md) -> Value {
+        local d: ValueData = ValueData(ValueKind.MdOperand, self.ctx.metadataType().id)
+        d.aux = 1
+        d.ops.push(node.id)
+        return self.ctx.addValue(d)
+    }
+}

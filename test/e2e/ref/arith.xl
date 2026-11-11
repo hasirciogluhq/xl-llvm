@@ -1,0 +1,12 @@
+// Reference for e2e/arith: the same computation written in xlang and compiled by xlc. The differential test compares its exit status
+// and output with those of the program xl-llvm built.
+@entry fn main() -> i32 {
+    local f: i32 = 1
+    for i in 1..=5 { f *= i }
+    local a: i32 = f + 100 / 7 - 100 % 7
+    a >>= 1
+    a |= 1
+    a ^= 3
+    a *= 2
+    return a
+}

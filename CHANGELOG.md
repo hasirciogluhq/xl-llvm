@@ -13,4 +13,8 @@ Versions are git tags (`vMAJOR.MINOR.PATCH`; a `-suffix` marks a pre-release).
 - `intrinsics/`: `llvm.trap`, `llvm.memcpy`, `llvm.memset`.
 - `tools/`: `Tools.verify`, `optimize`, `bitcode`, `object`, `assembly` over `opt`, `llvm-as` and `llc`.
 - Unit and e2e tests for every feature row, `test/features.sh`, and CI on Linux (x86-64, arm64), macOS (arm64, x86-64) and Windows.
-- Not in 1.0.0 (rows marked `todo` in FEATURES.md): debug info, generic metadata, `volatile`, fast-math flags, wide integers, vectors, exception handling, the differential test against `xlc`.
+- `ir/metadata.xl`: metadata strings, tuples, specialized nodes, named metadata, `metadata` operands; module flags are metadata nodes.
+- `debug/`: `DIBuilder` (`DIFile`, `DICompileUnit`, `DIBasicType`, pointer and subroutine types, `DISubprogram`, `DILocalVariable`, `DILocation`, `llvm.dbg.declare`), `Builder.setDebugLocation`, `Function.setSubprogram`.
+- `Module.printTo` (a `Stream`) and `printToFile`.
+- Differential e2e tests against reference programs built by `xlc` (`test/e2e/ref/`).
+- Not supported: `volatile` and atomic `load` / `store`, fast-math flags, `tail` calls, integers wider than 64 bits, vectors, `fp128`, `x86_fp80`, `invoke` and exception-handling personalities.

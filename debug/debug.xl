@@ -1,0 +1,122 @@
+// debug/debug: DWARF debug info through LLVM metadata, https://llvm.org/docs/SourceLevelDebugging.html
+//
+// `DIBuilder` makes the specialized metadata nodes a front end needs (`!DIFile`, `!DICompileUnit`, `!DIBasicType`,
+// `!DISubprogram`, `!DILocalVariable`, `!DILocation`, ...) on top of the generic nodes of ir/metadata.xl. Field names follow
+// https://llvm.org/docs/LangRef.html#specialized-metadata-nodes. Attach a location to instructions with
+// `Builder.setDebugLocation`, a subprogram with `Function.setSubprogram`, and describe a local with `declare`.
+from "std" import String, Vec
+from "../ir/types" import Type
+from "../ir/value" import Value
+from "../ir/context" import Context
+from "../ir/metadata" import Md, Metadata
+from "../ir/module" import Module, Function, FlagBehavior
+from "../builder/builder" import Builder
+
+export class DIBuilder {
+    mod: *Module
+    md: Metadata
+    file: Md
+    unit: Md
+
+    /// Starts debug info for `mod`: the file `filename` in `directory`, a compile unit made by `producer`, and the module flags
+    /// (`Debug Info Version`, `Dwarf Version`) LLVM needs to keep the metadata.
+    fn init(self, mod: *Module, filename: String, directory: String, producer: String) {
+        self.mod = mod
+        self.md = Metadata(mod.ctx)
+        self.file = self.md.special(String("DIFile"), false)
+        self.md.setString(self.file, String("filename"), filename)
+        self.md.setString(self.file, String("directory"), directory)
+        self.unit = self.md.special(String("DICompileUnit"), true)
+        self.md.setWord(self.unit, String("language"), String("DW_LANG_C99"))
+        self.md.setNode(self.unit, String("file"), self.file)
+        self.md.setString(self.unit, String("producer"), producer)
+        self.md.setBool(self.unit, String("isOptimized"), false)
+        self.md.setInt(self.unit, String("runtimeVersion"), 0)
+        self.md.setWord(self.unit, String("emissionKind"), String("FullDebug"))
+        mod.addNamed(String("llvm.dbg.cu"), self.unit)
+        mod.addFlag(FlagBehavior.Warning, String("Debug Info Version"), 3)
+        mod.addFlag(FlagBehavior.Max, String("Dwarf Version"), 4)
+    }
+
+    /// `!DIBasicType`; `encoding` is a DWARF word such as `DW_ATE_signed`, `DW_ATE_unsigned`, `DW_ATE_float`, `DW_ATE_boolean`.
+    fn basicType(self, name: String, bits: i64, encoding: String) -> Md {
+        local t: Md = self.md.special(String("DIBasicType"), false)
+        self.md.setString(t, String("name"), name)
+        self.md.setInt(t, String("size"), bits)
+        self.md.setWord(t, String("encoding"), encoding)
+        return t
+    }
+
+    /// `!DIDerivedType` pointer to `pointee` of `bits` (64 on a 64-bit target).
+    fn pointerType(self, pointee: Md, bits: i64) -> Md {
+        local t: Md = self.md.special(String("DIDerivedType"), false)
+        self.md.setWord(t, String("tag"), String("DW_TAG_pointer_type"))
+        self.md.setNode(t, String("baseType"), pointee)
+        self.md.setInt(t, String("size"), bits)
+        return t
+    }
+
+    /// `!DISubroutineType` of `types`: the return type first (`self.md.null()` for `void`), then the parameter types.
+    fn subroutineType(self, types: Vec<Md>) -> Md {
+        local list: Md = self.md.tuple(types)
+        local t: Md = self.md.special(String("DISubroutineType"), false)
+        self.md.setNode(t, String("types"), list)
+        return t
+    }
+
+    /// `!DISubprogram` for the definition `f` at `line`, with the type `ty` from `subroutineType`; it becomes the `!dbg` of `f`.
+    fn subprogram(self, f: Function, name: String, line: i64, ty: Md) -> Md {
+        local sp: Md = self.md.special(String("DISubprogram"), true)
+        self.md.setString(sp, String("name"), name)
+        self.md.setNode(sp, String("scope"), self.file)
+        self.md.setNode(sp, String("file"), self.file)
+        self.md.setInt(sp, String("line"), line)
+        self.md.setNode(sp, String("type"), ty)
+        self.md.setInt(sp, String("scopeLine"), line)
+        self.md.setWord(sp, String("spFlags"), String("DISPFlagDefinition"))
+        self.md.setNode(sp, String("unit"), self.unit)
+        f.setSubprogram(sp)
+        return sp
+    }
+
+    /// `!DILocalVariable` in `scope` (a subprogram); `arg` is the 1-based parameter number, 0 for a local.
+    fn variable(self, scope: Md, name: String, arg: i64, line: i64, ty: Md) -> Md {
+        local v: Md = self.md.special(String("DILocalVariable"), false)
+        self.md.setString(v, String("name"), name)
+        if arg > 0 { self.md.setInt(v, String("arg"), arg) }
+        self.md.setNode(v, String("scope"), scope)
+        self.md.setNode(v, String("file"), self.file)
+        self.md.setInt(v, String("line"), line)
+        self.md.setNode(v, String("type"), ty)
+        return v
+    }
+
+    /// `!DILocation` at `line`:`column` in `scope`, for `Builder.setDebugLocation`.
+    fn location(self, line: i64, column: i64, scope: Md) -> Md {
+        local l: Md = self.md.special(String("DILocation"), false)
+        self.md.setInt(l, String("line"), line)
+        self.md.setInt(l, String("column"), column)
+        self.md.setNode(l, String("scope"), scope)
+        return l
+    }
+
+    /// `call void @llvm.dbg.declare(metadata ptr slot, metadata !var, metadata !DIExpression())` at `loc`: the variable `var` lives
+    /// in the memory `slot` (an `alloca`). https://llvm.org/docs/SourceLevelDebugging.html#llvm-dbg-declare
+    fn dbgDeclare(self, b: *Builder, slot: Value, var: Md, loc: Md) {
+        local ctx: *Context = self.mod.ctx
+        local params: Vec<Type> = Vec<Type>()
+        params.push(ctx.metadataType())
+        params.push(ctx.metadataType())
+        params.push(ctx.metadataType())
+        local f: Function = self.mod.getOrDeclare(String("llvm.dbg.declare"), ctx.fnType(ctx.voidType(), params))
+        local expr: Md = self.md.special(String("DIExpression"), false)
+        local args: Vec<Value> = Vec<Value>()
+        args.push(self.md.operand(slot))
+        args.push(self.md.operandNode(var))
+        args.push(self.md.operandNode(expr))
+        local saved: u32 = b.loc
+        b.setDebugLocation(loc)
+        b.callFn(f, args)
+        b.loc = saved
+    }
+}

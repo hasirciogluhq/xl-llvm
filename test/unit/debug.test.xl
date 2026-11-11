@@ -1,0 +1,87 @@
+// Debug info: DIBuilder nodes, `!dbg` locations, subprograms and `llvm.dbg.declare`.
+// https://llvm.org/docs/SourceLevelDebugging.html
+from "std" import String, Vec
+from "std/testing" import Suite, T, suiteInit, test, suiteRun
+from "support" import text, expectHas, sig1
+import * from "xl-llvm"
+
+fn build(ctx: *Context, m: *Module) {
+    local di: DIBuilder = DIBuilder(m, String("a.xl"), String("/src"), String("xl-llvm"))
+    local int: Md = di.basicType(String("i32"), 32, String("DW_ATE_signed"))
+    local types: Vec<Md> = Vec<Md>()
+    types.push(int)
+    types.push(int)
+    local f: Function = m.addFunction(String("twice"), sig1(ctx, ctx.int32(), ctx.int32()))
+    local sp: Md = di.subprogram(f, String("twice"), 3, di.subroutineType(types))
+    local b: Builder = Builder(ctx)
+    b.setInsertPoint(f.addBlock(String("entry")))
+    local loc: Md = di.location(3, 5, sp)
+    b.setDebugLocation(loc)
+    local slot: Value = b.alloca(ctx.int32(), 4)
+    b.store(f.arg(0), slot, 4)
+    di.dbgDeclare(&b, slot, di.variable(sp, String("x"), 1, 3, int), loc)
+    local x: Value = b.load(ctx.int32(), slot, 4)
+    b.ret(b.add(x, x))
+}
+
+fn subprogramAndLocations(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    build(&ctx, &m)
+    local s: String = text(&m)
+    expectHas(t, &s, "define i32 @twice(i32 %0) !dbg !")
+    expectHas(t, &s, "  %2 = load i32, ptr %1, align 4, !dbg !4\n")
+    expectHas(t, &s, "  ret i32 %3, !dbg !4\n")
+}
+
+fn declareIntrinsic(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    build(&ctx, &m)
+    local s: String = text(&m)
+    expectHas(t, &s, "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n")
+    expectHas(t, &s, "  call void @llvm.dbg.declare(metadata ptr %1, metadata !")
+}
+
+fn nodes(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    build(&ctx, &m)
+    local s: String = text(&m)
+    expectHas(t, &s, "!llvm.dbg.cu = !{!")
+    expectHas(t, &s, "= distinct !DICompileUnit(language: DW_LANG_C99, file: !")
+    expectHas(t, &s, "producer: \"xl-llvm\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n")
+    expectHas(t, &s, "= !DIFile(filename: \"a.xl\", directory: \"/src\")\n")
+    expectHas(t, &s, "= !DIBasicType(name: \"i32\", size: 32, encoding: DW_ATE_signed)\n")
+    expectHas(t, &s, "= distinct !DISubprogram(name: \"twice\", scope: !")
+    expectHas(t, &s, "spFlags: DISPFlagDefinition, unit: !")
+    expectHas(t, &s, "= !DILocalVariable(name: \"x\", arg: 1, scope: !")
+    expectHas(t, &s, "= !DILocation(line: 3, column: 5, scope: !")
+    expectHas(t, &s, "= !DIExpression()\n")
+    expectHas(t, &s, "!\"Debug Info Version\", i32 3}\n")
+}
+
+fn voidSubroutine(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local di: DIBuilder = DIBuilder(&m, String("a.xl"), String("/src"), String("xl-llvm"))
+    local types: Vec<Md> = Vec<Md>()
+    types.push(di.md.null())
+    local f: Function = m.addFunction(String("nop"), ctx.fnType(ctx.voidType(), Vec<Type>()))
+    di.subprogram(f, String("nop"), 1, di.subroutineType(types))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("entry")))
+    b.retVoid()
+    local s: String = text(&m)
+    expectHas(t, &s, "= !{null}\n")
+}
+
+@entry fn main() -> i32 {
+    local s: Suite
+    suiteInit(&s)
+    test(&s, "subprogram and instruction locations", subprogramAndLocations)
+    test(&s, "llvm.dbg.declare", declareIntrinsic)
+    test(&s, "the debug info nodes", nodes)
+    test(&s, "a void subroutine type", voidSubroutine)
+    return suiteRun(&s)
+}

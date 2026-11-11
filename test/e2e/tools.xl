@@ -1,6 +1,6 @@
 // The tools layer: verify, optimize, bitcode, object and assembly on a real module, and the error of a rejected module.
 // Prints "tools ok" when every step behaves.
-from "std" import String, Vec, Option, Result, print, println
+from "std" import String, Vec, Option, Result, print, println, fsReadAllString, fsRemove
 import * from "xl-llvm"
 
 /// Checks `cond` and reports the failing step; returns the number of failures (0 or 1).
@@ -36,6 +36,18 @@ fn module(ctx: *Context, m: *Module) {
     }
     local failures: i32 = 0
     local tools: Tools = Tools()
+
+    // printToFile writes exactly the text `print` returns
+    local path: String = String("xl_llvm_tools_e2e.ll")
+    local wrote: Option<String> = m.printToFile(&path)
+    switch wrote {
+        case Option.Some(e) { failures += check(false, "printToFile writes the module") }
+        case Option.None {
+            local back: String = fsReadAllString(path.cstr())
+            failures += check(back.equals(&text), "printToFile and print give the same text")
+            fsRemove(path.cstr())
+        }
+    }
 
     local verdict: Option<String> = tools.verify(&text)
     switch verdict {

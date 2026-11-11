@@ -82,10 +82,12 @@ export class Inst {
     flag: bool
     order: AtomicOrdering
     order2: AtomicOrdering
+    dbg: u32             // the `!dbg` location (a DILocation node), NoValue for none
 
     fn init(self, op: Op) {
         self.op = op
         self.result = NoValue
         self.ty = NoValue
+        self.dbg = NoValue
     }
 }

@@ -1,0 +1,14 @@
+// Reference for e2e/memory: the `y` fields of three points copied and summed (2 + 4 + 6) plus a slot set to 7.
+struct Point {
+    x: i32
+    y: i32
+}
+
+@entry fn main() -> i32 {
+    local pts: [Point; 3] = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }, Point { x: 5, y: 6 }]
+    local copy: [Point; 3] = pts
+    local sum: i32 = 0
+    for i in 0..3 { sum += copy[i].y }
+    local slot: i32 = 7
+    return sum + slot
+}
