@@ -6,7 +6,7 @@
 // the module then prints none, which LLVM replaces with the target's own.
 //
 // The triple is parsed here in xlang, so no LLVM is needed to ask "is this Linux on arm64".
-from "std" import String, Option
+from "std" import String, Vec, Option, split
 from "../ir/module" import Module
 
 export enum Arch: i32 { X86_64, Aarch64, Other }
@@ -18,10 +18,6 @@ export struct Triple {
     arch: Arch
     os: Os
     env: Env
-}
-
-fn startsWith(s: *String, prefix: str) -> bool {
-    return s.startsWith(prefix)
 }
 
 /// Parses `text`; None when the architecture or the operating system is outside the supported set (x86-64 and arm64 on Linux,
@@ -38,10 +34,15 @@ export fn parseTriple(text: *String) -> Option<Triple> {
     if os.startsWith("windows") { t.os = Os.Windows }
     if parts.length() > 3 {
         local env: *String = parts.get(3)
-        if env.startsWith("gnu") { t.env = Env.Gnu }
-        else if env.startsWith("musl") { t.env = Env.Musl }
-        else if env.startsWith("msvc") { t.env = Env.Msvc }
-        else { t.env = Env.Other }
+        if env.startsWith("gnu") {
+            t.env = Env.Gnu
+        } else if env.startsWith("musl") {
+            t.env = Env.Musl
+        } else if env.startsWith("msvc") {
+            t.env = Env.Msvc
+        } else {
+            t.env = Env.Other
+        }
     }
     if os.startsWith("windows") && parts.length() == 3 { t.env = Env.Msvc }
     if t.arch == Arch.Other || t.os == Os.Other { return Option.None }
