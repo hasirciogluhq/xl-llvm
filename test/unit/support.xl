@@ -1,0 +1,83 @@
+// Helpers shared by the unit suites. Not a suite itself: `run.sh` only builds `*.test.xl`.
+from "std" import String, Vec, Result, print, println
+from "std/testing" import T, testFail
+import * from "xl-llvm"
+
+/// The printed text of `m`, or `error: <message>` when printing fails.
+export fn text(m: *Module) -> String {
+    local r: Result<String, String> = m.print()
+    switch r {
+        case Result.Ok(s) { return s.clone() }
+        case Result.Err(e) {
+            local out: String = String("error: ")
+            out.append(&e)
+            return out
+        }
+    }
+}
+
+/// Fails the test, showing both texts, unless `hay` contains `needle`.
+export fn expectHas(t: *T, hay: *String, needle: str) {
+    if hay.contains(needle) { return }
+    println("--- expected to find ---")
+    println(needle)
+    println("--- in ---")
+    println(hay)
+    testFail(t, "the text does not contain the expected line")
+}
+
+/// Fails the test, showing the text, when `hay` contains `needle`.
+export fn expectNotHas(t: *T, hay: *String, needle: str) {
+    if !hay.contains(needle) { return }
+    println("--- did not expect ---")
+    println(needle)
+    println("--- in ---")
+    println(hay)
+    testFail(t, "the text contains an unexpected line")
+}
+
+/// Fails the test unless the printed text of `m` is exactly `expected`.
+export fn expectText(t: *T, m: *Module, expected: str) {
+    local got: String = text(m)
+    if got.equals(expected) { return }
+    println("--- expected ---")
+    println(expected)
+    println("--- got ---")
+    println(&got)
+    testFail(t, "the printed module differs from the golden text")
+}
+
+/// The function type `ret ()`.
+export fn sig0(ctx: *Context, ret: Type) -> Type {
+    return ctx.fnType(ret, Vec<Type>())
+}
+
+/// The function type `ret (a)`.
+export fn sig1(ctx: *Context, ret: Type, a: Type) -> Type {
+    local p: Vec<Type> = Vec<Type>()
+    p.push(a)
+    return ctx.fnType(ret, p)
+}
+
+/// The function type `ret (a, b)`.
+export fn sig2(ctx: *Context, ret: Type, a: Type, b: Type) -> Type {
+    local p: Vec<Type> = Vec<Type>()
+    p.push(a)
+    p.push(b)
+    return ctx.fnType(ret, p)
+}
+
+/// A one-element list.
+export fn one(v: Value) -> Vec<Value> {
+    local l: Vec<Value> = Vec<Value>()
+    l.push(v)
+    return l
+}
+
+/// A two-element list.
+export fn two(a: Value, b: Value) -> Vec<Value> {
+    local l: Vec<Value> = Vec<Value>()
+    l.push(a)
+    l.push(b)
+    return l
+}
