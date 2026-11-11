@@ -1,0 +1,214 @@
+// Terminators, phi, block numbering and the one-terminator-per-block rules.
+// https://llvm.org/docs/LangRef.html#terminator-instructions
+from "std" import String, Vec
+from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectEqStr
+from "support" import text, expectHas, sig0, sig1, sig2, one
+import * from "xl-llvm"
+
+fn loopWithPhi(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local i32t: Type = ctx.int32()
+    local f: Function = m.addFunction(String("count"), sig1(&ctx, i32t, i32t))
+    local b: Builder = Builder(&ctx)
+    local entry: Block = f.addBlock(String("entry"))
+    local loop: Block = f.addBlock(String("loop"))
+    local done: Block = f.addBlock(String("done"))
+    b.setInsertPoint(entry)
+    b.br(loop)
+    b.setInsertPoint(loop)
+    local i: Value = b.phi(i32t)
+    local next: Value = b.add(i, ctx.constInt(i32t, 1))
+    local more: Value = b.icmp(IntPred.Slt, next, f.arg(0))
+    b.condBr(more, loop, done)
+    b.addIncoming(i, ctx.constInt(i32t, 0), entry)
+    b.addIncoming(i, next, loop)
+    b.setInsertPoint(done)
+    b.ret(next)
+    ctx.setName(i, String("i"))
+    ctx.setName(next, String("next"))
+    ctx.setName(more, String("more"))
+    local s: String = text(&m)
+    expectHas(t, &s, "entry:\n  br label %loop\nloop:\n")
+    expectHas(t, &s, "  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n")
+    expectHas(t, &s, "  %next = add i32 %i, 1\n")
+    expectHas(t, &s, "  %more = icmp slt i32 %next, %0\n")
+    expectHas(t, &s, "  br i1 %more, label %loop, label %done\n")
+    expectHas(t, &s, "done:\n  ret i32 %next\n")
+}
+
+fn switching(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local i32t: Type = ctx.int32()
+    local f: Function = m.addFunction(String("f"), sig1(&ctx, ctx.voidType(), i32t))
+    local b: Builder = Builder(&ctx)
+    local entry: Block = f.addBlock(String("entry"))
+    local a: Block = f.addBlock(String("a"))
+    local c: Block = f.addBlock(String("c"))
+    local d: Block = f.addBlock(String("d"))
+    b.setInsertPoint(entry)
+    local values: Vec<Value> = Vec<Value>()
+    values.push(ctx.constInt(i32t, 1))
+    values.push(ctx.constInt(i32t, 2))
+    local targets: Vec<Block> = Vec<Block>()
+    targets.push(a)
+    targets.push(c)
+    b.switchTo(f.arg(0), d, values, targets)
+    b.setInsertPoint(a)
+    b.retVoid()
+    b.setInsertPoint(c)
+    b.retVoid()
+    b.setInsertPoint(d)
+    b.unreachable()
+    local s: String = text(&m)
+    expectHas(t, &s, "  switch i32 %0, label %d [\n    i32 1, label %a\n    i32 2, label %c\n  ]\n")
+    expectHas(t, &s, "d:\n  unreachable\n")
+}
+
+fn computedGoto(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig1(&ctx, ctx.voidType(), ctx.ptr()))
+    local b: Builder = Builder(&ctx)
+    local entry: Block = f.addBlock(String("entry"))
+    local one_: Block = f.addBlock(String("one"))
+    local two_: Block = f.addBlock(String("two"))
+    b.setInsertPoint(entry)
+    local dests: Vec<Block> = Vec<Block>()
+    dests.push(one_)
+    dests.push(two_)
+    b.indirectBr(f.arg(0), dests)
+    b.setInsertPoint(one_)
+    b.retVoid()
+    b.setInsertPoint(two_)
+    b.retVoid()
+    local g: Value = m.addGlobal(String("target"), ctx.ptr())
+    m.setInitializer(g, m.blockAddress(f, two_))
+    local s: String = text(&m)
+    expectHas(t, &s, "  indirectbr ptr %0, [label %one, label %two]\n")
+    expectHas(t, &s, "@target = global ptr blockaddress(@f, %two)\n")
+}
+
+fn unnamedBlocks(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig0(&ctx, ctx.voidType()))
+    local b: Builder = Builder(&ctx)
+    local entry: Block = f.addBlock(String("entry"))
+    local next: Block = f.addBlock(String(""))
+    b.setInsertPoint(entry)
+    b.br(next)
+    b.setInsertPoint(next)
+    b.retVoid()
+    local s: String = text(&m)
+    expectHas(t, &s, "entry:\n  br label %0\n0:\n  ret void\n")
+}
+
+/// The text does not depend on the order in which blocks and instructions were built.
+fn buildOrder(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local i32t: Type = ctx.int32()
+    local f: Function = m.addFunction(String("f"), sig1(&ctx, i32t, i32t))
+    local b: Builder = Builder(&ctx)
+    local first: Block = f.addBlock(String(""))
+    local second: Block = f.addBlock(String(""))
+    b.setInsertPoint(second)                  // the later block is filled first
+    local y: Value = b.add(f.arg(0), f.arg(0))
+    b.ret(y)
+    b.setInsertPoint(first)
+    local x: Value = b.mul(f.arg(0), f.arg(0))
+    b.br(second)
+    local s: String = text(&m)
+    // numbers follow the layout: %0 the argument, %1 the first block, %2 its result, %3 the second block, %4 its result
+    expectHas(t, &s, "define i32 @f(i32 %0) {\n  %2 = mul i32 %0, %0\n  br label %3\n3:\n  %4 = add i32 %0, %0\n  ret i32 %4\n}\n")
+}
+
+fn terminatorRules(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig0(&ctx, ctx.voidType()))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("entry")))
+    b.retVoid()
+    b.retVoid()
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: builder: an instruction after the terminator of the block")
+    local ctx2: Context = Context()
+    local m2: Module = Module(&ctx2, String("t"))
+    local f2: Function = m2.addFunction(String("f"), sig0(&ctx2, ctx2.voidType()))
+    f2.addBlock(String("entry"))
+    local s2: String = text(&m2)
+    expectEqStr(t, s2.asStr(), "error: function @f: block 0 has no terminator")
+}
+
+fn returnChecks(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig0(&ctx, ctx.int32()))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("entry")))
+    b.ret(ctx.constInt(ctx.int64(), 1))
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: ret: the value does not match the return type of the function")
+    local ctx2: Context = Context()
+    local m2: Module = Module(&ctx2, String("t"))
+    local f2: Function = m2.addFunction(String("f"), sig0(&ctx2, ctx2.int32()))
+    local b2: Builder = Builder(&ctx2)
+    b2.setInsertPoint(f2.addBlock(String("entry")))
+    b2.retVoid()
+    local s2: String = text(&m2)
+    expectEqStr(t, s2.asStr(), "error: ret void: the function does not return void")
+}
+
+fn branchChecks(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig1(&ctx, ctx.voidType(), ctx.int32()))
+    local b: Builder = Builder(&ctx)
+    local entry: Block = f.addBlock(String("entry"))
+    b.setInsertPoint(entry)
+    b.condBr(f.arg(0), entry, entry)
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: br: the condition is not an i1")
+}
+
+fn phiChecks(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig1(&ctx, ctx.voidType(), ctx.int64()))
+    local b: Builder = Builder(&ctx)
+    local entry: Block = f.addBlock(String("entry"))
+    b.setInsertPoint(entry)
+    local p: Value = b.phi(ctx.int32())
+    b.addIncoming(p, f.arg(0), entry)
+    b.retVoid()
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: phi: the incoming value does not match the phi")
+}
+
+fn noInsertPoint(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local b: Builder = Builder(&ctx)
+    b.unreachable()
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: builder: no insertion point (call setInsertPoint first)")
+}
+
+@entry fn main() -> i32 {
+    local s: Suite
+    suiteInit(&s)
+    test(&s, "a loop with phi and conditional branch", loopWithPhi)
+    test(&s, "switch", switching)
+    test(&s, "indirectbr and blockaddress", computedGoto)
+    test(&s, "unnamed blocks are numbered", unnamedBlocks)
+    test(&s, "numbering does not depend on build order", buildOrder)
+    test(&s, "one terminator per block, every block terminated", terminatorRules)
+    test(&s, "ret is checked against the function type", returnChecks)
+    test(&s, "a conditional branch needs an i1", branchChecks)
+    test(&s, "phi incoming types are checked", phiChecks)
+    test(&s, "no insertion point is an error", noInsertPoint)
+    return suiteRun(&s)
+}

@@ -1,0 +1,143 @@
+// The module: header, globals, functions, attributes, names, module flags and determinism.
+// https://llvm.org/docs/LangRef.html#module-structure
+from "std" import String, Vec
+from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectEqStr, expectEq
+from "support" import text, expectHas, expectText, sig0, sig1
+import * from "xl-llvm"
+
+fn helloModule(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("main"))
+    m.setTriple(String("x86_64-unknown-linux-gnu"))
+    m.setDataLayout(String("e-m:e-i64:64"))
+    local f: Function = m.addFunction(String("main"), sig0(&ctx, ctx.int32()))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("entry")))
+    b.ret(ctx.constInt(ctx.int32(), 42))
+    expectText(t, &m, "; ModuleID = \"main\"\nsource_filename = \"main\"\ntarget datalayout = \"e-m:e-i64:64\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\ndefine i32 @main() {\nentry:\n  ret i32 42\n}\n")
+}
+
+fn globals(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local i32t: Type = ctx.int32()
+    local a: Value = m.addGlobal(String("counter"), i32t)
+    m.setInitializer(a, ctx.constInt(i32t, 1))
+    m.setGlobalLinkage(a, Linkage.Internal)
+    m.setGlobalAlign(a, 8)
+    local b: Value = m.addGlobal(String("table"), i32t)
+    m.setInitializer(b, ctx.constInt(i32t, 2))
+    m.setConstant(b, true)
+    m.setGlobalVisibility(b, Visibility.Hidden)
+    m.setUnnamedAddr(b, UnnamedAddr.Global)
+    m.setGlobalSection(b, String(".rodata.t"))
+    local c: Value = m.addGlobal(String("tls"), i32t)
+    m.setInitializer(c, ctx.zero(i32t))
+    m.setThreadLocal(c, ThreadLocal.InitialExec)
+    m.setGlobalLinkage(c, Linkage.Weak)
+    local d: Value = m.addGlobal(String("outside"), i32t)
+    local e: Value = m.addGlobal(String("odr"), i32t)
+    m.setInitializer(e, ctx.zero(i32t))
+    m.setGlobalLinkage(e, Linkage.LinkOnceOdr)
+    local s: String = text(&m)
+    expectHas(t, &s, "@counter = internal global i32 1, align 8\n")
+    expectHas(t, &s, "@table = hidden unnamed_addr constant i32 2, section \".rodata.t\"\n")
+    expectHas(t, &s, "@tls = weak thread_local(initialexec) global i32 zeroinitializer\n")
+    expectHas(t, &s, "@outside = external global i32\n")
+    expectHas(t, &s, "@odr = linkonce_odr global i32 zeroinitializer\n")
+}
+
+fn functions(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local ext: Function = m.addFunction(String("puts"), sig1(&ctx, ctx.int32(), ctx.ptr()))
+    local f: Function = m.addFunction(String("helper"), sig0(&ctx, ctx.voidType()))
+    f.setLinkage(Linkage.Internal)
+    f.setVisibility(Visibility.Hidden)
+    f.addAttr(FnAttr.NoUnwind)
+    f.addAttr(FnAttr.NoInline)
+    f.setAlign(16)
+    f.setSection(String(".text.cold"))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("entry")))
+    b.retVoid()
+    local g: Function = m.addFunction(String("never"), sig0(&ctx, ctx.voidType()))
+    g.addAttr(FnAttr.NoReturn)
+    local s: String = text(&m)
+    expectHas(t, &s, "declare i32 @puts(ptr)\n")
+    expectHas(t, &s, "define internal hidden void @helper() nounwind noinline section \".text.cold\" align 16 {\nentry:\n  ret void\n}\n")
+    expectHas(t, &s, "declare void @never() noreturn\n")
+    expectEq(t, ext.isDeclaration() ? 1 : 0, 1)
+    expectEq(t, f.isDeclaration() ? 1 : 0, 0)
+}
+
+fn quotedNames(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("a b"), sig1(&ctx, ctx.voidType(), ctx.int32()))
+    ctx.setName(f.arg(0), String("x y"))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("1st block")))
+    b.retVoid()
+    m.addGlobal(String("q\"uote"), ctx.int8())
+    m.addFunction(String(".dot-ok_$"), sig0(&ctx, ctx.voidType()))
+    local s: String = text(&m)
+    expectHas(t, &s, "define void @\"a b\"(i32 %\"x y\") {\n\"1st block\":\n  ret void\n}\n")
+    expectHas(t, &s, "@\"q\\22uote\" = external global i8\n")
+    expectHas(t, &s, "declare void @.dot-ok_$()\n")
+}
+
+fn moduleFlags(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    m.addFlag(FlagBehavior.Warning, String("Dwarf Version"), 5)
+    m.addFlag(FlagBehavior.Error, String("wchar_size"), 4)
+    local s: String = text(&m)
+    expectHas(t, &s, "\n!llvm.module.flags = !{!0, !1}\n!0 = !{i32 2, !\"Dwarf Version\", i32 5}\n!1 = !{i32 1, !\"wchar_size\", i32 4}\n")
+}
+
+fn getOrDeclare(t: *T) {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local a: Function = m.getOrDeclare(String("f"), sig0(&ctx, ctx.voidType()))
+    local b: Function = m.getOrDeclare(String("f"), sig0(&ctx, ctx.voidType()))
+    expectEq(t, a.id as i64, b.id as i64)
+    expectEq(t, m.funcs.length() as i64, 1)
+    m.getOrDeclare(String("f"), sig0(&ctx, ctx.int32()))
+    local s: String = text(&m)
+    expectEqStr(t, s.asStr(), "error: declare: @f exists with another type")
+}
+
+fn determinism(t: *T) {
+    local one_: String = build()
+    local two_: String = build()
+    expectEqStr(t, one_.asStr(), two_.asStr())
+}
+
+fn build() -> String {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("t"))
+    local f: Function = m.addFunction(String("f"), sig1(&ctx, ctx.int32(), ctx.int32()))
+    local b: Builder = Builder(&ctx)
+    b.setInsertPoint(f.addBlock(String("")))
+    local x: Value = b.add(f.arg(0), f.arg(0))
+    b.ret(x)
+    return text(&m)
+}
+
+fn text(m: *Module) -> String {
+    return support_text(m)
+}
+
+@entry fn main() -> i32 {
+    local s: Suite
+    suiteInit(&s)
+    test(&s, "a module prints its header and a function", helloModule)
+    test(&s, "global variables and their attributes", globals)
+    test(&s, "functions, declarations and attributes", functions)
+    test(&s, "names that need quotes", quotedNames)
+    test(&s, "module flags", moduleFlags)
+    test(&s, "getOrDeclare", getOrDeclare)
+    test(&s, "the same calls give the same text", determinism)
+    return suiteRun(&s)
+}
