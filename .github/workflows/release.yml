@@ -1,0 +1,99 @@
+name: release
+
+# Publishes a release when a version tag is pushed. The package is versioned by git tags (`xlang-docs/compiler/packages.md`), so the
+# tag itself is the release; this workflow tests it, then attaches a source archive and its checksum to a GitHub release.
+#
+# Tags: vMAJOR.MINOR.PATCH is a stable release; a tag with a suffix after `-` (v1.2.0-rc.1, v1.2.0-test) is marked a pre-release.
+# Can also be re-run for an existing tag from the Actions tab.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)release, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Resolve tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          # The package system accepts vMAJOR.MINOR.PATCH with an optional -suffix (packages.md, "Version tags").
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "error: tag '$tag' must look like v1.2.3 or v1.2.3-rc.1" >&2; exit 1; }
+          version="${tag#v}"
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
+
+  test:
+    name: Test
+    needs: meta
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  publish:
+    name: Publish ${{ needs.meta.outputs.tag }}
+    needs: [meta, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+      - name: Source archive
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Only what a program imports: index.xl, xlang.toml and the source folders. Tests, CI and the docs stay in the repository.
+          name="xl-llvm_${VERSION}"
+          mkdir -p "dist/$name"
+          cp index.xl xlang.toml LICENSE NOTICE "dist/$name/"
+          for dir in */; do
+            case "$dir" in test/ | dist/ | scripts/) continue ;; esac
+            cp -R "$dir" "dist/$name/"
+          done
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          (cd dist && sha256sum "$name.tar.gz" >checksums.txt)
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=(--generate-notes --title "$TAG")
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.tar.gz dist/checksums.txt --clobber
+          else
+            gh release create "$TAG" dist/*.tar.gz dist/checksums.txt "${flags[@]}"
+          fi

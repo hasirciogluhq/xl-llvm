@@ -1,0 +1,57 @@
+name: ci
+
+# Type-checks the package against the xlang compiler `xlc`: the newest stable release when it has one, otherwise its newest
+# pre-release (see .github/scripts/install-xlc.sh). Also called by the release workflow before a release is published.
+# The unit, e2e and features.sh jobs are added with the first tests (see FEATURES.md).
+#
+# Reading the compiler repository needs a token while that repository is private: add the secret XLC_TOKEN (contents: read on
+# hasirciogluhq/xlc). Without it the workflow's own token is used, which works once the compiler repository is public.
+#
+# Manual run: `workflow_dispatch` with `xlc_version` (for example v1.0.0-rc.2) pins a compiler release.
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+  workflow_call:
+    inputs:
+      xlc_version:
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      xlc_version:
+        description: "Compiler release tag to use instead of the newest one (optional)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XLC_VERSION: ${{ inputs.xlc_version }}
+  GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
+
+jobs:
+  # The package is pure source: it must type-check for every target, whatever the host is.
+  check:
+    name: type-check (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - run: .github/scripts/install-xlc.sh
+      - name: xlc --check index.xl
+        run: xlc index.xl --check -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
