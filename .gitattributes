@@ -1,0 +1,7 @@
+# Line endings are LF on every OS: the shell scripts, the e2e table and FEATURES.md are read by bash, where a CR ends up in the data.
+* text=auto eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.xl text eol=lf
+*.yml text eol=lf

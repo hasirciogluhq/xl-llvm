@@ -45,6 +45,7 @@ emit() {
 }
 
 while IFS='|' read -r kind name a b || [ -n "$kind" ]; do
+  b=${b%$'\r'}; name=${name%$'\r'}      # a checkout with CRLF line endings leaves a CR on the last field
   case "$kind" in '' | '#'*) continue ;; esac
   if [ -n "$filter" ] && ! [[ $name =~ $filter ]]; then continue; fi
   label="e2e/$kind/$name"
