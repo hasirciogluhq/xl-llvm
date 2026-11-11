@@ -7,3 +7,20 @@ run|hello|42|
 cross|hello
 run|arith|128|
 cross|arith
+run|memory|19|
+cross|memory
+run|calls|9|xl-llvm says 7
+cross|calls
+run|control|37|
+cross|control
+run|floats|7|
+cross|floats
+run|atomics|20|
+cross|atomics
+run|asm|42|
+cross|asm
+run|linkage|9|
+sym|linkage|[Tt] .*main$|[TtDd] .*(helper|secret)$
+sym|linkage|[Ww] .*weakFn$|
+cross|linkage
+tool|tools|0|tools ok
