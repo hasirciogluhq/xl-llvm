@@ -41,7 +41,7 @@ build() {
 # emit <name> [triple]: the IR text of the program into $work/<name>[.<triple>].ll
 emit() {
   local out="$work/$1${2:+.$2}.ll"
-  "$work/$1$exe" ${2:+"$2"} >"$out" 2>"$work/$1.err" || { echo "the program failed: $(cat "$work/$1.err")"; return 1; }
+  env ${2:+"XL_LLVM_TRIPLE=$2"} "$work/$1$exe" >"$out" 2>"$work/$1.err" || { echo "the program failed: $(cat "$work/$1.err")"; return 1; }
 }
 
 while IFS='|' read -r kind name a b || [ -n "$kind" ]; do

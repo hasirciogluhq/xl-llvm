@@ -4,10 +4,10 @@ from "std" import String, Vec
 from "emit" import begin, finish, targetOf
 import * from "xl-llvm"
 
-@entry fn main(argc: i32, argv: **u8) -> i32 {
+@entry fn main() -> i32 {
     local ctx: Context = Context()
     local m: Module = Module(&ctx, String("asm"))
-    begin(&m, argc, argv)
+    begin(&m)
     local i32t: Type = ctx.int32()
     local fnTy: Type = ctx.fnType(i32t, Vec<Type>())
     local b: Builder = Builder(&ctx)
