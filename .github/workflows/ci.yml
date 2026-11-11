@@ -1,8 +1,16 @@
 name: ci
 
-# Type-checks the package against the xlang compiler `xlc`: the newest stable release when it has one, otherwise its newest
-# pre-release (see .github/scripts/install-xlc.sh). Also called by the release workflow before a release is published.
-# The unit, e2e and features.sh jobs are added with the first tests (see FEATURES.md).
+# Tests xl-llvm against the xlang compiler `xlc` and the xlang standard library `xl-std`:
+#   check     type-checks the package for every target
+#   features  FEATURES.md and the test files agree
+#   unit      the platform independent unit suites, built and run on every host
+#   e2e       the platform related tests: they run opt, llc, llvm-as, clang and the programs they produce, on every host
+#   consume   a program that imports the package the way an installed dependency is imported
+# Also called by the release workflow before a release is published.
+#
+# The compiler is the newest stable release of `xlc` when it has one, otherwise its newest pre-release (see
+# .github/scripts/install-xlc.sh). The standard library is `hasirciogluhq/xl-std` at XL_STD_REF below. LLVM is installed by
+# .github/scripts/install-llvm.sh (18 on Linux, the newest release on macOS and Windows).
 #
 # Reading the compiler repository needs a token while that repository is private: add the secret XLC_TOKEN (contents: read on
 # hasirciogluhq/xlc). Without it the workflow's own token is used, which works once the compiler repository is public.
@@ -35,6 +43,9 @@ concurrency:
 env:
   XLC_VERSION: ${{ inputs.xlc_version }}
   GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
+  # The standard library the package is built against (a tag or branch of hasirciogluhq/xl-std).
+  XL_STD_REF: v1.0.0
+  XL_STD: ${{ github.workspace }}/xl-std
 
 jobs:
   # The package is pure source: it must type-check for every target, whatever the host is.
@@ -52,19 +63,94 @@ jobs:
           - x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hasirciogluhq/xl-std
+          ref: ${{ env.XL_STD_REF }}
+          path: xl-std
       - run: .github/scripts/install-xlc.sh
-      - name: xlc --check index.xl
-        run: xlc index.xl --check -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+      - name: xlc index.xl --check
+        run: xlc index.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+      # The tools layer is OS code: check it (through the e2e program that uses it) for every target too.
+      - name: xlc test/e2e/tools.xl --check
+        run: xlc test/e2e/tools.xl --check -M std="$XL_STD" -M xl-llvm="$PWD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
 
-  # An installed package is a directory of source that the compiler gets as a module root (`-M xl-llvm=<dir>`): a program that imports it
-  # must build and run. The release workflow repeats this on the packed archive.
+  features:
+    name: features table
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: test/features.sh
+
+  # Unit suites build against the package and run natively on each host. They are platform independent: every host must give the
+  # same text, and none of them starts a tool.
+  unit:
+    name: unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hasirciogluhq/xl-std
+          ref: ${{ env.XL_STD_REF }}
+          path: xl-std
+      - run: .github/scripts/install-xlc.sh
+      # xlc links Mach-O executables with LLVM's `ld64.lld`, ELF ones with `ld.lld`; the runners do not have them.
+      - name: Linker (macOS)
+        if: runner.os == 'macOS'
+        run: brew install lld
+      - name: Linker (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends lld
+      - name: Unit suites
+        run: test/unit/run.sh
+
+  # End-to-end tests drive LLVM: verify the printed text, compile and link it, run the program, check the symbol table, run the
+  # compile-only legs for every target.
+  e2e:
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hasirciogluhq/xl-std
+          ref: ${{ env.XL_STD_REF }}
+          path: xl-std
+      - run: .github/scripts/install-xlc.sh
+      - name: LLVM and linker
+        run: .github/scripts/install-llvm.sh
+      - name: End-to-end tests
+        run: test/e2e/run.sh
+
+  # An installed package is a directory of source that the compiler gets as a module root (`-M xl-llvm=<dir>`): a program that
+  # imports it must build and run. The release workflow repeats this on the packed archive.
   consume:
     name: consume as a package
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hasirciogluhq/xl-std
+          ref: ${{ env.XL_STD_REF }}
+          path: xl-std
       - run: .github/scripts/install-xlc.sh
       - name: Build and run a program that imports xl-llvm
         run: |
-          xlc test/consume/main.xl -M xl-llvm="$PWD" -DfeatureDefaultAllocator=true -o consume
+          xlc test/consume/main.xl -M xl-llvm="$PWD" -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true -o consume
           ./consume
