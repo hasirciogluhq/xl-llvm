@@ -1,0 +1,22 @@
+name: Set up xlang
+description: >
+  Checks out the xlang standard library next to the package and installs the xlang compiler `xlc` (the newest stable release, else the
+  newest pre-release, and XLC_VERSION pins one). The compiler is a download of a few seconds, so it is not cached. Needs GH_TOKEN in
+  the environment and the package checked out. XL_STD_REF names the standard library tag unless the input std-ref is given.
+
+inputs:
+  std-ref:
+    description: "Tag or branch of hasirciogluhq/xl-std (default: XL_STD_REF of the workflow)"
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v7
+      with:
+        repository: hasirciogluhq/xl-std
+        ref: ${{ inputs.std-ref || env.XL_STD_REF }}
+        path: xl-std
+    - name: Install the compiler
+      shell: bash
+      run: .github/scripts/install-xlc.sh

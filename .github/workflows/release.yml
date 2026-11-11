@@ -76,11 +76,12 @@ jobs:
           ref=$(sed -n 's/^  XL_STD_REF: *//p' .github/workflows/ci.yml | head -1)
           [ -n "$ref" ] || { echo "error: XL_STD_REF not found in ci.yml" >&2; exit 1; }
           echo "ref=$ref" >>"$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
+      # The standard library and the compiler, as in ci.yml.
+      - uses: ./.github/actions/setup-xl
+        env:
+          GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
         with:
-          repository: hasirciogluhq/xl-std
-          ref: ${{ steps.std.outputs.ref }}
-          path: xl-std
+          std-ref: ${{ steps.std.outputs.ref }}
       - name: Source archive
         shell: bash
         env:
@@ -92,7 +93,7 @@ jobs:
           mkdir -p "dist/$name"
           cp index.xl xlang.toml LICENSE NOTICE "dist/$name/"
           for dir in */; do
-            case "$dir" in test/ | dist/ | scripts/) continue ;; esac
+            case "$dir" in test/ | dist/ | scripts/ | xl-std/ | verify/) continue ;; esac
             cp -R "$dir" "dist/$name/"
           done
           tar -czf "dist/$name.tar.gz" -C dist "$name"
@@ -102,10 +103,8 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.meta.outputs.version }}
-          GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          .github/scripts/install-xlc.sh
           mkdir -p verify
           tar -xzf "dist/xl-llvm_${VERSION}.tar.gz" -C verify
           xlc test/consume/main.xl -M xl-llvm="$PWD/verify/xl-llvm_${VERSION}" -M std="$PWD/xl-std" --import std -DfeatureDefaultAllocator=true -o verify/consume

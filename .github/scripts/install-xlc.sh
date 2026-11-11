@@ -9,7 +9,8 @@
 #   GH_TOKEN        token that may read the compiler repository (needed while it is private; `github.token` is enough once it is public)
 #   XLC_REPO        compiler repository (default hasirciogluhq/xlc)
 #   XLC_VERSION     tag to install instead of the newest one (optional)
-#   RUNNER_TEMP, GITHUB_PATH   set by GitHub Actions; outside Actions the binary goes to ./.xlc/bin and PATH is not touched
+#   XLC_HOME        directory that holds the install (default ~/.xl-ci); an install of the wanted version there is reused
+#   GITHUB_PATH     set by GitHub Actions; outside Actions PATH is not touched and the directory is printed
 #
 # Assets (see the compiler's release workflow): xlc_<version>_<os>_<arch>.tar.gz (zip on Windows) and checksums.txt, with os
 # darwin|linux|windows and arch amd64|arm64.
@@ -33,17 +34,24 @@ tag=${XLC_VERSION:-}
 if [ -z "$tag" ]; then
   # `releases/latest` never returns a pre-release or a draft, and answers 404 while the repository has only pre-releases.
   if tag=$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null) && [ -n "$tag" ]; then
-    echo "xlc: newest stable release is $tag"
+    echo "xlc: newest stable release is $tag" >&2
   else
     # The list is newest first.
     tag=$(gh api "repos/$repo/releases?per_page=100" --jq '[.[] | select(.draft | not) | select(.prerelease)] | first | .tag_name // empty')
     [ -n "$tag" ] || { echo "error: $repo has no stable release and no pre-release" >&2; exit 1; }
-    echo "xlc: no stable release yet, using the newest pre-release $tag"
+    echo "xlc: no stable release yet, using the newest pre-release $tag" >&2
   fi
 fi
 version=${tag#v}
 
-dest=${RUNNER_TEMP:-$PWD/.xlc}/xlc
+dest=${XLC_HOME:-$HOME/.xl-ci}/xlc
+if [ -x "$dest/bin/xlc" ] || [ -x "$dest/bin/xlc.exe" ]; then
+  if [ "$("$dest/bin/xlc" --version 2>/dev/null)" = "$version" ]; then
+    echo "xlc: $version is already installed in $dest"
+    if [ -n "${GITHUB_PATH:-}" ]; then echo "$dest/bin" >>"$GITHUB_PATH"; else echo "add $dest/bin to PATH"; fi
+    exit 0
+  fi
+fi
 mkdir -p "$dest/bin" "$dest/download"
 asset="xlc_${version}_${os}_${arch}.${ext}"
 gh release download "$tag" -R "$repo" -D "$dest/download" -p "$asset" -p checksums.txt --clobber

@@ -1,0 +1,60 @@
+name: Set up LLVM
+description: >
+  Installs the lld linker (`tools: lld`) or the whole set the e2e tests drive: opt, llc, llvm-as, llvm-nm, clang and lld (`tools: all`).
+  LLVM 18 on Linux, the newest release on macOS and Windows. Package downloads are cached per OS and CPU.
+
+inputs:
+  tools:
+    description: "`lld` or `all`"
+    default: all
+
+runs:
+  using: composite
+  steps:
+    # Linux: apt keeps the downloaded .deb files in /var/cache/apt/archives; restoring them lets `apt-get install` skip the download.
+    - name: Make the apt cache writable
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo chmod a+rwx /var/cache/apt/archives
+    - name: Cache apt packages
+      if: runner.os == 'Linux'
+      uses: actions/cache@v6
+      with:
+        path: /var/cache/apt/archives/*.deb
+        key: apt-${{ runner.arch }}-llvm18-${{ inputs.tools }}-v1
+
+    # macOS: Homebrew's download cache holds the bottles.
+    - name: Cache Homebrew downloads
+      if: runner.os == 'macOS'
+      uses: actions/cache@v6
+      with:
+        path: ~/Library/Caches/Homebrew
+        key: brew-${{ runner.arch }}-llvm-${{ inputs.tools }}-v1
+
+    # Windows: clang and lld are on the runner; opt, llc, llvm-as and llvm-nm come from MSYS2, whose package cache the action keeps.
+    - name: MSYS2 LLVM tools
+      if: runner.os == 'Windows' && inputs.tools == 'all'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: UCRT64
+        update: false
+        cache: true
+        install: mingw-w64-ucrt-x86_64-llvm
+    - name: Put the MSYS2 tools on PATH
+      if: runner.os == 'Windows' && inputs.tools == 'all'
+      shell: bash
+      run: echo 'C:\msys64\ucrt64\bin' >>"$GITHUB_PATH"
+
+    - name: Install
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      run: .github/scripts/install-llvm.sh ${{ inputs.tools }}
+    - name: Versions
+      if: inputs.tools == 'all'
+      shell: bash
+      run: |
+        opt --version | head -3
+        llc --version | head -2
+        clang --version | head -1

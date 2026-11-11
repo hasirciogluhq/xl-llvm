@@ -8,9 +8,10 @@ name: ci
 #   consume   a program that imports the package the way an installed dependency is imported
 # Also called by the release workflow before a release is published.
 #
-# The compiler is the newest stable release of `xlc` when it has one, otherwise its newest pre-release (see
-# .github/scripts/install-xlc.sh). The standard library is `hasirciogluhq/xl-std` at XL_STD_REF below. LLVM is installed by
-# .github/scripts/install-llvm.sh (18 on Linux, the newest release on macOS and Windows).
+# The compiler is the newest stable release of `xlc` when it has one, otherwise its newest pre-release (action setup-xl, script
+# install-xlc.sh). The standard library is `hasirciogluhq/xl-std` at XL_STD_REF below. LLVM is installed by the action setup-llvm
+# (18 on Linux, the newest release on macOS, the runner's clang plus MSYS2's opt and llc on Windows); its package downloads are
+# cached. The compiler is a download of a few seconds and is not cached.
 #
 # Reading the compiler repository needs a token while that repository is private: add the secret XLC_TOKEN (contents: read on
 # hasirciogluhq/xlc). Without it the workflow's own token is used, which works once the compiler repository is public.
@@ -63,12 +64,7 @@ jobs:
           - x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: hasirciogluhq/xl-std
-          ref: ${{ env.XL_STD_REF }}
-          path: xl-std
-      - run: .github/scripts/install-xlc.sh
+      - uses: ./.github/actions/setup-xl
       - name: xlc index.xl --check
         run: xlc index.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
       # The tools layer is OS code: check it (through the e2e program that uses it) for every target too.
@@ -96,19 +92,11 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: hasirciogluhq/xl-std
-          ref: ${{ env.XL_STD_REF }}
-          path: xl-std
-      - run: .github/scripts/install-xlc.sh
+      - uses: ./.github/actions/setup-xl
       # xlc links Mach-O executables with LLVM's `ld64.lld`, ELF ones with `ld.lld`; the runners do not have them.
-      - name: Linker (macOS)
-        if: runner.os == 'macOS'
-        run: brew install lld
-      - name: Linker (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends lld
+      - uses: ./.github/actions/setup-llvm
+        with:
+          tools: lld
       - name: Unit suites
         run: test/unit/run.sh
 
@@ -126,14 +114,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-xl
+      - uses: ./.github/actions/setup-llvm
         with:
-          repository: hasirciogluhq/xl-std
-          ref: ${{ env.XL_STD_REF }}
-          path: xl-std
-      - run: .github/scripts/install-xlc.sh
-      - name: LLVM and linker
-        run: .github/scripts/install-llvm.sh
+          tools: all
       - name: End-to-end tests
         run: test/e2e/run.sh
 
@@ -144,12 +128,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: hasirciogluhq/xl-std
-          ref: ${{ env.XL_STD_REF }}
-          path: xl-std
-      - run: .github/scripts/install-xlc.sh
+      - uses: ./.github/actions/setup-xl
       - name: Build and run a program that imports xl-llvm
         run: |
           xlc test/consume/main.xl -M xl-llvm="$PWD" -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true -o consume
