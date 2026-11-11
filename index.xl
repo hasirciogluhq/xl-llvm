@@ -1,1 +1,5 @@
-// xl-llvm: a light LLVM library for xlang. Empty package; the public exports are added here as the design in PLAN.md is built.
+export * from "ir/types"
+export * from "ir/value"
+export * from "ir/inst"
+export * from "ir/context"
+export * from "ir/module"

@@ -1,0 +1,312 @@
+// ir/context: the owner of all types and values, https://llvm.org/docs/LangRef.html
+//
+// Nothing is global: every type, constant and value belongs to one `Context`. A `Context` is single-threaded; separate
+// contexts can be used on separate threads. Types are uniqued here, so equal types have equal handles.
+//
+// Errors: a call that fails a check (a type mismatch in the `Builder`, an invalid width) records the first error here with
+// `fail`, naming the call, and goes on with a harmless value. `mod.print()` returns the recorded error as a `Result`.
+from "std" import String, Vec, format, toString
+from "types" import Type, TypeKind, TypeData, MaxIntBits
+from "value" import Value, ValueKind, ValueData, NoValue
+from "inst" import Inst
+
+/// Whether the raw ids `a` are the ids of the types `b`, in order.
+fn sameIds(a: *Vec<u32>, b: *Vec<Type>) -> bool {
+    if a.length() != b.length() { return false }
+    for i in 0..a.length() {
+        if *a.get(i) != b.get(i).id { return false }
+    }
+    return true
+}
+
+export class Context {
+    types: Vec<TypeData>
+    values: Vec<ValueData>
+    failed: bool
+    error: String           // the first recorded error, empty until `failed`
+
+    // ---- errors ----
+
+    /// Records `message` as the error of this context unless an earlier one is already recorded.
+    fn fail(self, message: String) {
+        if self.failed { return }
+        self.failed = true
+        self.error = message
+    }
+
+    fn hasError(self) -> bool {
+        return self.failed
+    }
+
+    // ---- type table ----
+
+    fn data(self, t: Type) -> *TypeData {
+        return self.types.get(t.id as usize)
+    }
+
+    fn add(self, d: TypeData) -> Type {
+        self.types.push(d)
+        return Type { id: (self.types.length() - 1) as u32 }
+    }
+
+    fn kind(self, t: Type) -> TypeKind {
+        return self.data(t).kind
+    }
+
+    fn voidType(self) -> Type {
+        for i in 0..self.types.length() {
+            if self.types.get(i).kind == TypeKind.Void { return Type { id: i as u32 } }
+        }
+        return self.add(TypeData(TypeKind.Void))
+    }
+
+    fn labelType(self) -> Type {
+        for i in 0..self.types.length() {
+            if self.types.get(i).kind == TypeKind.Label { return Type { id: i as u32 } }
+        }
+        return self.add(TypeData(TypeKind.Label))
+    }
+
+    fn ptr(self) -> Type {
+        for i in 0..self.types.length() {
+            if self.types.get(i).kind == TypeKind.Ptr { return Type { id: i as u32 } }
+        }
+        return self.add(TypeData(TypeKind.Ptr))
+    }
+
+    /// `iN` for 1 <= N <= 64 (https://llvm.org/docs/LangRef.html#integer-type; wider integers are not built yet).
+    fn intType(self, bits: u32) -> Type {
+        if bits == 0 || bits > MaxIntBits {
+            self.fail(format("intType: width {} is outside 1..{}", bits as u64, MaxIntBits as u64))
+            return self.intType(32)
+        }
+        for i in 0..self.types.length() {
+            local d: *TypeData = self.types.get(i)
+            if d.kind == TypeKind.Int && d.bits == bits { return Type { id: i as u32 } }
+        }
+        local d: TypeData = TypeData(TypeKind.Int)
+        d.bits = bits
+        return self.add(d)
+    }
+
+    // `i1`..`i64` are type names in xlang, so the shorthands are spelled out.
+    fn int1(self) -> Type { return self.intType(1) }
+    fn int8(self) -> Type { return self.intType(8) }
+    fn int16(self) -> Type { return self.intType(16) }
+    fn int32(self) -> Type { return self.intType(32) }
+    fn int64(self) -> Type { return self.intType(64) }
+
+    /// `half` (16), `float` (32) or `double` (64) bits.
+    fn floatType(self, bits: u32) -> Type {
+        if bits != 16 && bits != 32 && bits != 64 {
+            self.fail(format("floatType: width {} is not 16, 32 or 64", bits as u64))
+            return self.floatType(64)
+        }
+        for i in 0..self.types.length() {
+            local d: *TypeData = self.types.get(i)
+            if d.kind == TypeKind.Float && d.bits == bits { return Type { id: i as u32 } }
+        }
+        local d: TypeData = TypeData(TypeKind.Float)
+        d.bits = bits
+        return self.add(d)
+    }
+
+    fn float32(self) -> Type { return self.floatType(32) }
+    fn float64(self) -> Type { return self.floatType(64) }
+
+    /// `[N x T]`.
+    fn arrayType(self, elem: Type, count: u64) -> Type {
+        for i in 0..self.types.length() {
+            local d: *TypeData = self.types.get(i)
+            if d.kind == TypeKind.Array && d.count == count && *d.elems.get(0) == elem.id { return Type { id: i as u32 } }
+        }
+        local d: TypeData = TypeData(TypeKind.Array)
+        d.count = count
+        d.elems.push(elem.id)
+        return self.add(d)
+    }
+
+    /// The literal struct `{ T, U }`, or `<{ T, U }>` when `packed`.
+    fn structType(self, fields: Vec<Type>, packed: bool) -> Type {
+        for i in 0..self.types.length() {
+            local d: *TypeData = self.types.get(i)
+            if d.kind == TypeKind.Struct && !d.named && d.packed == packed && sameIds(&d.elems, &fields) { return Type { id: i as u32 } }
+        }
+        local d: TypeData = TypeData(TypeKind.Struct)
+        d.packed = packed
+        for i in 0..fields.length() { d.elems.push(fields.get(i).id) }
+        return self.add(d)
+    }
+
+    /// The identified struct `%name`, created opaque on first use; `setBody` gives it fields.
+    fn namedStruct(self, name: String) -> Type {
+        for i in 0..self.types.length() {
+            local d: *TypeData = self.types.get(i)
+            if d.kind == TypeKind.Struct && d.named && d.name.equals(&name) { return Type { id: i as u32 } }
+        }
+        local d: TypeData = TypeData(TypeKind.Struct)
+        d.named = true
+        d.opaque = true
+        d.name = name
+        return self.add(d)
+    }
+
+    /// Gives the identified struct `t` its fields. A second body is an error.
+    fn setBody(self, t: Type, fields: Vec<Type>, packed: bool) {
+        local d: *TypeData = self.data(t)
+        if d.kind != TypeKind.Struct || !d.named || !d.opaque {
+            self.fail(String("setBody: the type is not an opaque identified struct"))
+            return
+        }
+        d.opaque = false
+        d.packed = packed
+        for i in 0..fields.length() { d.elems.push(fields.get(i).id) }
+    }
+
+    /// `ret (params)`; `vararg` adds `...`.
+    fn fnType(self, ret: Type, params: Vec<Type>, vararg: bool) -> Type {
+        for i in 0..self.types.length() {
+            local d: *TypeData = self.types.get(i)
+            if d.kind == TypeKind.Func && d.ret == ret.id && d.vararg == vararg && sameIds(&d.elems, &params) { return Type { id: i as u32 } }
+        }
+        local d: TypeData = TypeData(TypeKind.Func)
+        d.ret = ret.id
+        d.vararg = vararg
+        for i in 0..params.length() { d.elems.push(params.get(i).id) }
+        return self.add(d)
+    }
+
+    fn fnType(self, ret: Type, params: Vec<Type>) -> Type {
+        return self.fnType(ret, params, false)
+    }
+
+    fn isInt(self, t: Type) -> bool { return self.kind(t) == TypeKind.Int }
+    fn isFloat(self, t: Type) -> bool { return self.kind(t) == TypeKind.Float }
+    fn isPtr(self, t: Type) -> bool { return self.kind(t) == TypeKind.Ptr }
+    fn isVoid(self, t: Type) -> bool { return self.kind(t) == TypeKind.Void }
+
+    /// The bit width of an integer or floating-point type, 0 for any other.
+    fn bitWidth(self, t: Type) -> u32 {
+        local d: *TypeData = self.data(t)
+        if d.kind == TypeKind.Int || d.kind == TypeKind.Float { return d.bits }
+        return 0
+    }
+
+    /// The type of element `i` of an array, struct or function type; the return type of a function type is `returnType`.
+    fn element(self, t: Type, i: usize) -> Type {
+        local d: *TypeData = self.data(t)
+        if d.kind == TypeKind.Array { return Type { id: *d.elems.get(0) } }
+        return Type { id: *d.elems.get(i) }
+    }
+
+    fn returnType(self, fnTy: Type) -> Type {
+        return Type { id: self.data(fnTy).ret }
+    }
+
+    fn paramCount(self, fnTy: Type) -> usize {
+        return self.data(fnTy).elems.length()
+    }
+
+    // ---- value table ----
+
+    fn value(self, v: Value) -> *ValueData {
+        return self.values.get(v.id as usize)
+    }
+
+    fn addValue(self, d: ValueData) -> Value {
+        self.values.push(d)
+        return Value { id: (self.values.length() - 1) as u32 }
+    }
+
+    fn typeOf(self, v: Value) -> Type {
+        return Type { id: self.value(v).ty }
+    }
+
+    /// Names a local value, an argument or an instruction result (`%name`). Unnamed values are numbered at print time.
+    fn setName(self, v: Value, name: String) {
+        self.value(v).name = name
+    }
+
+    // ---- constants: https://llvm.org/docs/LangRef.html#simple-constants ----
+
+    /// An integer constant; `v` is truncated to the width of `ty`.
+    fn constInt(self, ty: Type, v: i64) -> Value {
+        if !self.isInt(ty) {
+            self.fail(String("constInt: the type is not an integer type"))
+            return self.undef(ty)
+        }
+        local d: ValueData = ValueData(ValueKind.ConstInt, ty.id)
+        local bits: u32 = self.data(ty).bits
+        d.bits = bits == 64 ? v as u64 : (v as u64) & ((1 as u64 << bits) - 1)
+        return self.addValue(d)
+    }
+
+    fn constBool(self, v: bool) -> Value {
+        return self.constInt(self.int1(), v ? 1 : 0)
+    }
+
+    /// A floating-point constant of type `ty` (`float` values are rounded to single precision first).
+    fn constFloat(self, ty: Type, v: f64) -> Value {
+        if !self.isFloat(ty) || self.data(ty).bits == 16 {
+            self.fail(String("constFloat: the type is not float or double"))
+            return self.undef(ty)
+        }
+        local d: ValueData = ValueData(ValueKind.ConstFloat, ty.id)
+        local x: f64 = self.data(ty).bits == 32 ? (v as f32) as f64 : v
+        d.bits = *(&x as *u64)
+        return self.addValue(d)
+    }
+
+    fn null(self) -> Value { return self.addValue(ValueData(ValueKind.Null, self.ptr().id)) }
+    fn undef(self, ty: Type) -> Value { return self.addValue(ValueData(ValueKind.Undef, ty.id)) }
+    fn poison(self, ty: Type) -> Value { return self.addValue(ValueData(ValueKind.Poison, ty.id)) }
+    fn zero(self, ty: Type) -> Value { return self.addValue(ValueData(ValueKind.Zero, ty.id)) }
+
+    /// A struct constant `{ T 1, U 2 }` of type `ty` (a literal or identified struct); the elements must match its fields.
+    fn constStruct(self, ty: Type, elems: Vec<Value>) -> Value {
+        local d: *TypeData = self.data(ty)
+        if d.kind != TypeKind.Struct || d.opaque || d.elems.length() != elems.length() {
+            self.fail(String("constStruct: the elements do not match the struct type"))
+            return self.undef(ty)
+        }
+        local out: ValueData = ValueData(ValueKind.Aggregate, ty.id)
+        for i in 0..elems.length() {
+            if self.value(*elems.get(i)).ty != *d.elems.get(i) { self.fail(format("constStruct: element {} has the wrong type", i as u64)) }
+            out.ops.push(elems.get(i).id)
+        }
+        return self.addValue(out)
+    }
+
+    /// An array constant `[ T a, T b ]` of type `ty`.
+    fn constArray(self, ty: Type, elems: Vec<Value>) -> Value {
+        local d: *TypeData = self.data(ty)
+        if d.kind != TypeKind.Array || d.count != elems.length() as u64 {
+            self.fail(String("constArray: the elements do not match the array type"))
+            return self.undef(ty)
+        }
+        local out: ValueData = ValueData(ValueKind.Aggregate, ty.id)
+        for i in 0..elems.length() {
+            if self.value(*elems.get(i)).ty != *d.elems.get(0) { self.fail(format("constArray: element {} has the wrong type", i as u64)) }
+            out.ops.push(elems.get(i).id)
+        }
+        return self.addValue(out)
+    }
+
+    /// The bytes of `bytes` as a `[N x i8]` constant, with a trailing NUL when `nul` is set.
+    fn constString(self, bytes: String, nul: bool) -> Value {
+        local n: u64 = bytes.length() as u64 + (nul ? 1 : 0)
+        local d: ValueData = ValueData(ValueKind.CString, self.arrayType(self.int8(), n).id)
+        d.name = bytes
+        d.flag = nul
+        return self.addValue(d)
+    }
+
+    /// `getelementptr inbounds (srcTy, ptr base, indices...)`, a constant address inside a global.
+    fn constGep(self, srcTy: Type, base: Value, indices: Vec<Value>) -> Value {
+        local d: ValueData = ValueData(ValueKind.GepExpr, self.ptr().id)
+        d.aux = srcTy.id
+        d.ops.push(base.id)
+        for i in 0..indices.length() { d.ops.push(indices.get(i).id) }
+        return self.addValue(d)
+    }
+}

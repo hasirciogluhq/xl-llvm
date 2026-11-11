@@ -1,0 +1,131 @@
+// ir/value: values, constants and the enums that describe globals and functions.
+// https://llvm.org/docs/LangRef.html#constants and https://llvm.org/docs/LangRef.html#global-variables
+//
+// A `Value` is a handle (an index into the `Context`'s value table). Constants, globals, functions, arguments and instruction
+// results are all values. Everything an instruction needs to print itself (names, numbers, operands) is looked up from the
+// handle at print time, so building order never affects the output.
+from "std" import String, Vec
+
+export enum ValueKind: i32 {
+    ConstInt      // bits: the two's complement bits of the value, zero-extended to 64
+    ConstFloat    // bits: the IEEE 754 binary64 bits of the value (a `float` is rounded when it is created)
+    Null          // `null`
+    Undef         // `undef`
+    Poison        // `poison`
+    Zero          // `zeroinitializer`
+    Aggregate     // ops: the elements of a struct or array constant
+    CString       // name: the bytes of a `c"..."` array
+    GepExpr       // ops: the base pointer then the indices; aux: the source element type
+    BlockAddr     // ops: the function; aux: the block index
+    Global        // a global variable: `@name`
+    Function      // a function: `@name`
+    Arg           // a function argument; owner: the function, aux: the position
+    Inst          // an instruction result; owner: the function, aux: the block, index: the instruction
+    InlineAsm     // name: the template; the constraints are in `text`
+}
+
+/// A handle to a value of one `Context`.
+export struct Value {
+    id: u32
+}
+
+/// The id used for "no value" (a `void` result, an absent operand).
+export const NoValue: u32 = 0xffffffff
+
+export class ValueData {
+    kind: ValueKind
+    ty: u32
+    name: String       // global and local names without the sigil; the bytes of a CString; the template of an InlineAsm
+    text: String       // InlineAsm: the constraint string
+    bits: u64
+    ops: Vec<u32>
+    aux: u32
+    index: u32
+    owner: u32
+    slot: i64          // the number the printer gave an unnamed local, -1 when it has none
+    flag: bool         // InlineAsm: sideeffect; ConstInt: unused
+
+    fn init(self, kind: ValueKind, ty: u32) {
+        self.kind = kind
+        self.ty = ty
+        self.owner = NoValue
+        self.slot = -1
+    }
+}
+
+// https://llvm.org/docs/LangRef.html#linkage-types
+export enum Linkage: i32 {
+    External
+    Internal
+    Private
+    Weak
+    WeakOdr
+    LinkOnce
+    LinkOnceOdr
+    Common
+    ExternWeak
+    AvailableExternally
+}
+
+// https://llvm.org/docs/LangRef.html#visibility-styles
+export enum Visibility: i32 {
+    Default
+    Hidden
+    Protected
+}
+
+// https://llvm.org/docs/LangRef.html#thread-local-storage-models
+export enum ThreadLocal: i32 {
+    None
+    Dynamic
+    LocalDynamic
+    InitialExec
+    LocalExec
+}
+
+// https://llvm.org/docs/LangRef.html#global-attributes
+export enum UnnamedAddr: i32 {
+    None
+    Local
+    Global
+}
+
+// https://llvm.org/docs/LangRef.html#function-attributes (the ones a compiler front end uses)
+export enum FnAttr: i32 {
+    NoUnwind
+    NoReturn
+    NoInline
+    AlwaysInline
+    InlineHint
+    Cold
+    OptNone
+    OptSize
+    MinSize
+    ReadNone
+    ReadOnly
+    WillReturn
+    NoRecurse
+    NoRedZone
+    NoImplicitFloat
+    Naked
+}
+
+/// A global variable. `value` is its address (a `ptr` constant); `valueTy` is the type of the object it holds.
+export class GlobalData {
+    value: u32
+    valueTy: u32
+    initializer: u32     // the initial value (a constant), NoValue for a declaration
+    linkage: Linkage
+    visibility: Visibility
+    threadLocal: ThreadLocal
+    unnamedAddr: UnnamedAddr
+    isConst: bool        // `constant` instead of `global`
+    align: u32           // 0: the type's ABI alignment
+    section: String      // empty: none
+
+    fn init(self, value: u32, valueTy: u32) {
+        self.value = value
+        self.valueTy = valueTy
+        self.initializer = NoValue
+    }
+}

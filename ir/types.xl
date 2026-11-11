@@ -1,0 +1,43 @@
+// ir/types: the type system of the IR, https://llvm.org/docs/LangRef.html#type-system
+//
+// A `Type` is a handle (an index into the `Context`'s type table), so a type can never be passed where a value is expected.
+// Types are structural and uniqued by the `Context`: asking twice for `i32` or `[4 x i32]` gives the same handle. Identified
+// (named) structs are the exception: they are unique by name and get their body later, so they can refer to themselves.
+// This file holds data only; the text of a type is made by the printer.
+from "std" import String, Vec
+
+export enum TypeKind: i32 {
+    Void       // https://llvm.org/docs/LangRef.html#void-type
+    Int        // https://llvm.org/docs/LangRef.html#integer-type
+    Float      // half, float, double: https://llvm.org/docs/LangRef.html#floating-point-types
+    Ptr        // the opaque pointer `ptr`: https://llvm.org/docs/LangRef.html#pointer-type
+    Array      // https://llvm.org/docs/LangRef.html#array-type
+    Struct     // https://llvm.org/docs/LangRef.html#structure-type
+    Func       // https://llvm.org/docs/LangRef.html#function-type
+    Label      // the type of a basic block operand
+}
+
+/// A handle to a type of one `Context`.
+export struct Type {
+    id: u32
+}
+
+/// The widest integer the printer and the constants support in one word.
+export const MaxIntBits: u32 = 64
+
+export class TypeData {
+    kind: TypeKind
+    bits: u32          // Int: the width; Float: 16, 32 or 64
+    count: u64         // Array: the element count
+    elems: Vec<u32>    // Array: [element]; Struct: the fields; Func: the parameters
+    ret: u32           // Func: the return type
+    vararg: bool       // Func: `...`
+    packed: bool       // Struct: `<{ ... }>`
+    named: bool        // Struct: identified, `%name = type { ... }`
+    opaque: bool       // Struct: named and without a body yet
+    name: String       // Struct: the name of an identified struct
+
+    fn init(self, kind: TypeKind) {
+        self.kind = kind
+    }
+}

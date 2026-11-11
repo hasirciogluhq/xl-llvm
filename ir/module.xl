@@ -1,0 +1,232 @@
+// ir/module: the module, its globals and functions, and the basic blocks of a function.
+// https://llvm.org/docs/LangRef.html#module-structure
+//
+// `Module`, `Function` and `Block` are classes whose handles stay valid while the module lives: a `Function` is a (module,
+// index) pair, so adding more functions never invalidates one. Functions may be declared before they are defined and built in
+// any order; names and numbers are assigned by the printer, never by build order.
+from "std" import String, Vec, format
+from "types" import Type, TypeKind
+from "value" import Value, ValueKind, ValueData, NoValue, GlobalData, Linkage, Visibility, ThreadLocal, UnnamedAddr, FnAttr
+from "inst" import Inst, Op
+from "context" import Context
+
+// https://llvm.org/docs/LangRef.html#module-flags-metadata
+export enum FlagBehavior: i32 {
+    Error = 1
+    Warning = 2
+    Require = 3
+    Override = 4
+    Append = 5
+    AppendUnique = 6
+    Max = 7
+    Min = 8
+}
+
+export class ModuleFlag {
+    behavior: FlagBehavior
+    key: String
+    value: i64          // an `i32` flag value
+}
+
+export class BlockData {
+    name: String        // empty: unnamed, numbered by the printer
+    insts: Vec<Inst>
+    slot: i64           // the number the printer gave an unnamed block, -1 when it has none
+}
+
+export class FunctionData {
+    value: u32
+    fnTy: u32
+    blocks: Vec<BlockData>      // empty: a declaration
+    args: Vec<u32>
+    linkage: Linkage
+    visibility: Visibility
+    attrs: Vec<FnAttr>
+    align: u32
+    section: String
+}
+
+export class Module {
+    ctx: *Context
+    name: String
+    triple: String              // empty: none printed
+    dataLayout: String          // empty: none printed
+    globals: Vec<GlobalData>
+    funcs: Vec<FunctionData>
+    flags: Vec<ModuleFlag>
+
+    fn init(self, ctx: *Context, name: String) {
+        self.ctx = ctx
+        self.name = name
+    }
+
+    fn setTriple(self, triple: String) {
+        self.triple = triple
+    }
+
+    fn setDataLayout(self, layout: String) {
+        self.dataLayout = layout
+    }
+
+    /// Adds `!{i32 behavior, !"key", i32 value}` to `!llvm.module.flags`.
+    fn addFlag(self, behavior: FlagBehavior, key: String, value: i64) {
+        local f: ModuleFlag = ModuleFlag { behavior: behavior, key: key, value: value }
+        self.flags.push(f)
+    }
+
+    // ---- globals: https://llvm.org/docs/LangRef.html#global-variables ----
+
+    /// A global variable holding an object of type `ty`; its value is the address (a `ptr`). Without an initializer it is a
+    /// declaration (`external global`).
+    fn addGlobal(self, name: String, ty: Type) -> Value {
+        local d: ValueData = ValueData(ValueKind.Global, self.ctx.ptr().id)
+        d.name = name
+        d.index = self.globals.length() as u32
+        local v: Value = self.ctx.addValue(d)
+        self.globals.push(GlobalData(v.id, ty.id))
+        return v
+    }
+
+    fn globalData(self, v: Value) -> *GlobalData {
+        return self.globals.get(self.ctx.value(v).index as usize)
+    }
+
+    fn setInitializer(self, g: Value, init: Value) {
+        if self.ctx.value(init).ty != self.globalData(g).valueTy {
+            self.ctx.fail(String("setInitializer: the initializer type differs from the global's type"))
+            return
+        }
+        self.globalData(g).initializer = init.id
+    }
+
+    fn setConstant(self, g: Value, isConst: bool) { self.globalData(g).isConst = isConst }
+    fn setGlobalLinkage(self, g: Value, linkage: Linkage) { self.globalData(g).linkage = linkage }
+    fn setGlobalVisibility(self, g: Value, v: Visibility) { self.globalData(g).visibility = v }
+    fn setThreadLocal(self, g: Value, t: ThreadLocal) { self.globalData(g).threadLocal = t }
+    fn setUnnamedAddr(self, g: Value, u: UnnamedAddr) { self.globalData(g).unnamedAddr = u }
+    fn setGlobalAlign(self, g: Value, align: u32) { self.globalData(g).align = align }
+    fn setGlobalSection(self, g: Value, section: String) { self.globalData(g).section = section }
+
+    // ---- functions: https://llvm.org/docs/LangRef.html#functions ----
+
+    /// A function of type `fnTy`; it is a declaration until it gets a block.
+    fn addFunction(self, name: String, fnTy: Type) -> Function {
+        if self.ctx.kind(fnTy) != TypeKind.Func {
+            self.ctx.fail(String("addFunction: the type is not a function type"))
+        }
+        local d: ValueData = ValueData(ValueKind.Function, self.ctx.ptr().id)
+        d.name = name
+        d.index = self.funcs.length() as u32
+        local v: Value = self.ctx.addValue(d)
+        local f: FunctionData = FunctionData()
+        f.value = v.id
+        f.fnTy = fnTy.id
+        local params: usize = self.ctx.paramCount(fnTy)
+        for i in 0..params {
+            local a: ValueData = ValueData(ValueKind.Arg, self.ctx.element(fnTy, i).id)
+            a.owner = d.index
+            a.aux = i as u32
+            f.args.push(self.ctx.addValue(a).id)
+        }
+        self.funcs.push(f)
+        return Function(self, d.index)
+    }
+
+    /// The function declared with this value (from `Function.value`, or a `call` target).
+    fn function(self, v: Value) -> Function {
+        return Function(self, self.ctx.value(v).index)
+    }
+
+    /// The constant address of block `b` of `f`, for `indirectbr`: https://llvm.org/docs/LangRef.html#addresses-of-basic-blocks
+    fn blockAddress(self, f: Function, b: Block) -> Value {
+        local d: ValueData = ValueData(ValueKind.BlockAddr, self.ctx.ptr().id)
+        d.owner = f.id
+        d.aux = b.id
+        d.ops.push(self.funcs.get(f.id as usize).value)
+        return self.ctx.addValue(d)
+    }
+}
+
+/// A function of a `Module`.
+export class Function {
+    mod: *Module
+    id: u32
+
+    fn init(self, mod: *Module, id: u32) {
+        self.mod = mod
+        self.id = id
+    }
+
+    fn data(self) -> *FunctionData {
+        return self.mod.funcs.get(self.id as usize)
+    }
+
+    /// The function as a value (a `ptr` constant), the callee of `call`.
+    fn value(self) -> Value {
+        return Value { id: self.data().value }
+    }
+
+    fn fnType(self) -> Type {
+        return Type { id: self.data().fnTy }
+    }
+
+    fn arg(self, i: usize) -> Value {
+        return Value { id: *self.data().args.get(i) }
+    }
+
+    fn argCount(self) -> usize {
+        return self.data().args.length()
+    }
+
+    fn isDeclaration(self) -> bool {
+        return self.data().blocks.length() == 0
+    }
+
+    /// Appends a basic block. An empty name leaves the block unnamed: the printer numbers it.
+    fn addBlock(self, name: String) -> Block {
+        local b: BlockData = BlockData()
+        b.name = name
+        b.slot = -1
+        local fd: *FunctionData = self.data()
+        fd.blocks.push(b)
+        return Block(self.mod, self.id, (fd.blocks.length() - 1) as u32)
+    }
+
+    fn setLinkage(self, linkage: Linkage) { self.data().linkage = linkage }
+    fn setVisibility(self, v: Visibility) { self.data().visibility = v }
+    fn addAttr(self, a: FnAttr) { self.data().attrs.push(a) }
+    fn setAlign(self, align: u32) { self.data().align = align }
+    fn setSection(self, section: String) { self.data().section = section }
+}
+
+/// A basic block of a function.
+export class Block {
+    mod: *Module
+    func: u32       // the index of the function in the module
+    id: u32         // the index of the block in the function
+
+    fn init(self, mod: *Module, func: u32, id: u32) {
+        self.mod = mod
+        self.func = func
+        self.id = id
+    }
+
+    fn data(self) -> *BlockData {
+        return self.mod.funcs.get(self.func as usize).blocks.get(self.id as usize)
+    }
+
+    /// Whether the last instruction is a terminator (`ret`, `br`, `switch`, `indirectbr`, `unreachable`).
+    fn terminated(self) -> bool {
+        local insts: *Vec<Inst> = &self.data().insts
+        if insts.length() == 0 { return false }
+        return isTerminator(insts.last())
+    }
+}
+
+/// Whether `i` ends a basic block.
+export fn isTerminator(i: *Inst) -> bool {
+    switch i.op {
+        case Op.Ret, Op.RetVoid, Op.Br, Op.CondBr, Op.Switch, Op.IndirectBr, Op.Unreachable { return true }
+        default { return false }
+    }
+}

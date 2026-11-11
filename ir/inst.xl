@@ -1,0 +1,91 @@
+// ir/inst: instructions as data. The `Builder` creates them, the printer turns them into text; this file has no syntax in it.
+// https://llvm.org/docs/LangRef.html#instruction-reference
+from "std" import String, Vec
+from "value" import NoValue
+
+export enum Op: i32 {
+    Ret            // ops: [value]
+    RetVoid
+    Br             // blocks: [target]
+    CondBr         // ops: [cond]; blocks: [then, else]
+    Switch         // ops: [value, case constants...]; blocks: [default, case targets...]
+    IndirectBr     // ops: [address]; blocks: the possible destinations
+    Unreachable
+    Binary         // sub: BinOp; ops: [lhs, rhs]; flags: wrap and exact flags
+    FNeg           // ops: [value]
+    ICmp           // sub: IntPred; ops: [lhs, rhs]
+    FCmp           // sub: FloatPred; ops: [lhs, rhs]
+    Alloca         // ty: the allocated type; align
+    Load           // ty: the loaded type; ops: [ptr]; align; flag: volatile
+    Store          // ops: [value, ptr]; align; flag: volatile
+    Gep            // ty: the source element type; ops: [ptr, indices...]; flag: inbounds
+    Cast           // sub: CastOp; ty: the target type; ops: [value]
+    Call           // ty: the function type; ops: [callee, args...]
+    Phi            // ty: the type; ops: incoming values; blocks: incoming blocks
+    Select         // ops: [cond, then, else]
+    ExtractValue   // ops: [aggregate]; idx: the indices
+    InsertValue    // ops: [aggregate, element]; idx: the indices
+    AtomicRmw      // sub: AtomicOp; ops: [ptr, value]; order; align
+    CmpXchg        // ops: [ptr, expected, new]; order: success; order2: failure; align
+    Fence          // order
+    Freeze         // ops: [value]
+}
+
+// https://llvm.org/docs/LangRef.html#binary-operations and https://llvm.org/docs/LangRef.html#bitwise-binary-operations
+export enum BinOp: i32 {
+    Add, Sub, Mul, UDiv, SDiv, URem, SRem
+    Shl, LShr, AShr, And, Or, Xor
+    FAdd, FSub, FMul, FDiv, FRem
+}
+
+// https://llvm.org/docs/LangRef.html#conversion-operations
+export enum CastOp: i32 {
+    Trunc, ZExt, SExt, FpTrunc, FpExt, FpToUi, FpToSi, UiToFp, SiToFp, PtrToInt, IntToPtr, BitCast
+}
+
+// https://llvm.org/docs/LangRef.html#icmp-instruction
+export enum IntPred: i32 {
+    Eq, Ne, Ugt, Uge, Ult, Ule, Sgt, Sge, Slt, Sle
+}
+
+// https://llvm.org/docs/LangRef.html#fcmp-instruction
+export enum FloatPred: i32 {
+    False, Oeq, Ogt, Oge, Olt, Ole, One, Ord, Uno, Ueq, Ugt, Uge, Ult, Ule, Une, True
+}
+
+// https://llvm.org/docs/LangRef.html#atomicrmw-instruction
+export enum AtomicOp: i32 {
+    Xchg, Add, Sub, And, Nand, Or, Xor, Max, Min, UMax, UMin
+}
+
+// https://llvm.org/docs/LangRef.html#atomic-memory-ordering-constraints
+export enum AtomicOrdering: i32 {
+    Unordered, Monotonic, Acquire, Release, AcqRel, SeqCst
+}
+
+/// Flag bits of `Inst.flags`.
+export const FlagNuw: u32 = 1        // no unsigned wrap: add, sub, mul, shl
+export const FlagNsw: u32 = 2        // no signed wrap: add, sub, mul, shl
+export const FlagExact: u32 = 4      // udiv, sdiv, lshr, ashr
+export const FlagDisjoint: u32 = 8   // or
+
+export class Inst {
+    op: Op
+    sub: i32
+    result: u32          // the value this instruction defines, NoValue for `void`
+    ty: u32
+    ops: Vec<u32>
+    blocks: Vec<u32>
+    idx: Vec<u32>
+    align: u32           // 0: the ABI alignment
+    flags: u32
+    flag: bool
+    order: AtomicOrdering
+    order2: AtomicOrdering
+
+    fn init(self, op: Op) {
+        self.op = op
+        self.result = NoValue
+        self.ty = NoValue
+    }
+}
