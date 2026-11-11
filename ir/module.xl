@@ -138,6 +138,19 @@ export class Module {
         return Function(self, d.index)
     }
 
+    /// The function called `name`, declared now with type `fnTy` when the module has none yet. Asking again gives the same
+    /// function; a different type for an existing name is an error.
+    fn getOrDeclare(self, name: String, fnTy: Type) -> Function {
+        for i in 0..self.funcs.length() {
+            local f: *FunctionData = self.funcs.get(i)
+            if self.ctx.value(Value { id: f.value }).name.equals(&name) {
+                if f.fnTy != fnTy.id { self.ctx.fail(format("declare: @{} exists with another type", &name)) }
+                return Function(self, i as u32)
+            }
+        }
+        return self.addFunction(name, fnTy)
+    }
+
     /// The function declared with this value (from `Function.value`, or a `call` target).
     fn function(self, v: Value) -> Function {
         return Function(self, self.ctx.value(v).index)

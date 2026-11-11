@@ -131,6 +131,7 @@ class Printer {
             case ValueKind.Arg, ValueKind.Inst { self.localRef(d) }
             case ValueKind.InlineAsm {
                 self.out.append(d.flag ? "asm sideeffect " : "asm ")
+                if d.bits != 0 { self.out.append("inteldialect ") }
                 appendQuoted(&self.out, &d.name)
                 self.out.append(", ")
                 appendQuoted(&self.out, &d.text)

@@ -301,6 +301,17 @@ export class Context {
         return self.addValue(d)
     }
 
+    /// An inline assembly fragment, the callee of a `call`: https://llvm.org/docs/LangRef.html#inline-assembler-expressions
+    /// `intel` selects the Intel dialect (the default is AT&T); `sideEffect` keeps the call from being removed or reordered.
+    fn inlineAsm(self, template: String, constraints: String, sideEffect: bool, intel: bool) -> Value {
+        local d: ValueData = ValueData(ValueKind.InlineAsm, self.ptr().id)
+        d.name = template
+        d.text = constraints
+        d.flag = sideEffect
+        d.bits = intel ? 1 : 0
+        return self.addValue(d)
+    }
+
     /// `getelementptr inbounds (srcTy, ptr base, indices...)`, a constant address inside a global.
     fn constGep(self, srcTy: Type, base: Value, indices: Vec<Value>) -> Value {
         local d: ValueData = ValueData(ValueKind.GepExpr, self.ptr().id)

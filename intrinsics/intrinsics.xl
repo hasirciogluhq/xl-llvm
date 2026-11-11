@@ -1,0 +1,41 @@
+// intrinsics/intrinsics: declarations of the LLVM intrinsics a compiler front end uses, https://llvm.org/docs/LangRef.html#intrinsic-functions
+//
+// Each function declares the intrinsic in the module on first use and returns it; call it with `Builder.callFn`. Asking twice
+// gives the same declaration.
+from "std" import String, Vec
+from "../ir/types" import Type
+from "../ir/value" import FnAttr
+from "../ir/context" import Context
+from "../ir/module" import Module, Function
+
+/// `declare void @llvm.trap()`: https://llvm.org/docs/LangRef.html#llvm-trap-intrinsic
+export fn trap(m: *Module) -> Function {
+    local f: Function = m.getOrDeclare(String("llvm.trap"), m.ctx.fnType(m.ctx.voidType(), Vec<Type>()))
+    if f.data().attrs.length() == 0 {
+        f.addAttr(FnAttr.NoReturn)
+        f.addAttr(FnAttr.NoUnwind)
+    }
+    return f
+}
+
+/// `declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 isvolatile)`: https://llvm.org/docs/LangRef.html#llvm-memcpy-intrinsic
+export fn memcpy(m: *Module) -> Function {
+    local ctx: *Context = m.ctx
+    local params: Vec<Type> = Vec<Type>()
+    params.push(ctx.ptr())
+    params.push(ctx.ptr())
+    params.push(ctx.int64())
+    params.push(ctx.int1())
+    return m.getOrDeclare(String("llvm.memcpy.p0.p0.i64"), ctx.fnType(ctx.voidType(), params))
+}
+
+/// `declare void @llvm.memset.p0.i64(ptr, i8 value, i64 length, i1 isvolatile)`: https://llvm.org/docs/LangRef.html#llvm-memset-intrinsics
+export fn memset(m: *Module) -> Function {
+    local ctx: *Context = m.ctx
+    local params: Vec<Type> = Vec<Type>()
+    params.push(ctx.ptr())
+    params.push(ctx.int8())
+    params.push(ctx.int64())
+    params.push(ctx.int1())
+    return m.getOrDeclare(String("llvm.memset.p0.i64"), ctx.fnType(ctx.voidType(), params))
+}
