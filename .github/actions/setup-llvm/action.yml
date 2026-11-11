@@ -32,7 +32,9 @@ runs:
         key: brew-${{ runner.arch }}-llvm-${{ inputs.tools }}-v1
 
     # Windows: clang and lld are on the runner; opt, llc, llvm-as and llvm-nm come from MSYS2, whose package cache the action keeps.
+    # The action extracts its own MSYS2 (under RUNNER_TEMP, not C:\msys64) and reports where as `msys2-location`.
     - name: MSYS2 LLVM tools
+      id: msys
       if: runner.os == 'Windows' && inputs.tools == 'all'
       uses: msys2/setup-msys2@v2
       with:
@@ -40,10 +42,17 @@ runs:
         update: false
         cache: true
         install: mingw-w64-ucrt-x86_64-llvm
+    # Newer MSYS2 may ship the command line tools (opt, llc, llvm-as) in a separate package: install it when opt is missing.
+    - name: MSYS2 LLVM command line tools
+      if: runner.os == 'Windows' && inputs.tools == 'all'
+      shell: msys2 {0}
+      run: |
+        test -x /ucrt64/bin/opt.exe || pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-llvm-tools
+        ls /ucrt64/bin | grep -E '^(opt|llc|llvm-as|llvm-nm)\.exe$'
     - name: Put the MSYS2 tools on PATH
       if: runner.os == 'Windows' && inputs.tools == 'all'
       shell: bash
-      run: echo 'C:\msys64\ucrt64\bin' >>"$GITHUB_PATH"
+      run: echo "${{ steps.msys.outputs.msys2-location }}\\ucrt64\\bin" >>"$GITHUB_PATH"
 
     - name: Install
       shell: bash
