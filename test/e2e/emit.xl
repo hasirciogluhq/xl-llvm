@@ -2,7 +2,7 @@
 // then verifies the text with `opt`, compiles it with `llc` or `clang`, links, runs it and checks the result.
 //
 // Usage of a program:  <program> [target-triple]     (no argument: the triple of the host)
-from "std" import String, Result, print, eprint, fromC
+from "std" import String, Option, Result, print, eprint, fromC
 import * from "xl-llvm"
 
 /// Sets the target of `m` from `argv[1]`, or the host triple without it.
@@ -16,11 +16,13 @@ export fn begin(m: *Module, argc: i32, argv: **u8) {
 
 /// The target triple of `m` parsed; the programs that depend on the CPU or OS read it.
 export fn targetOf(m: *Module) -> Triple {
+    local out: Triple = Triple { arch: Arch.Other, os: Os.Other, env: Env.None }
     local parsed: Option<Triple> = parseTriple(&m.triple)
     switch parsed {
-        case Option.Some(t) { return t }
-        case Option.None { return Triple { arch: Arch.Other, os: Os.Other, env: Env.None } }
+        case Option.Some(t) { out = t }
+        case Option.None {}
     }
+    return out
 }
 
 /// Prints the module; 0, or 2 after printing the recorded error on stderr.
