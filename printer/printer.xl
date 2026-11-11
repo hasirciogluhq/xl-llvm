@@ -1,0 +1,605 @@
+// printer/printer: turns a `Module` into LLVM IR text, https://llvm.org/docs/LangRef.html
+//
+// The printer is where numbering lives: unnamed arguments, blocks and instruction results of a function share one counter in
+// definition order (`%0`, `%1`, ...), assigned here at print time, so the order in which the module was built never changes the
+// text. Output is deterministic: the same calls give byte-identical text (no hash order anywhere). Named values and blocks are
+// escaped as needed (`%"a b"`).
+from "std" import String, Vec, Result, format
+from "../ir/types" import Type, TypeKind, TypeData
+from "../ir/value" import Value, ValueKind, ValueData, NoValue, GlobalData, Linkage
+from "../ir/inst" import Inst, Op, BinOp, CastOp, IntPred, FloatPred, AtomicOp, AtomicOrdering, FlagNuw, FlagNsw, FlagExact, FlagDisjoint
+from "../ir/context" import Context
+from "../ir/module" import Module, FunctionData, BlockData, ModuleFlag, isTerminator
+from "syntax" import appendInt, appendUInt, appendHex64, appendName, appendIdent, appendQuoted, appendCString, appendLinkage, appendVisibility, appendThreadLocal, appendUnnamedAddr, appendFnAttr, appendBinOp, appendCastOp, appendIntPred, appendFloatPred, appendAtomicOp, appendOrdering
+
+class Printer {
+    ctx: *Context
+    mod: *Module
+    out: String
+
+    fn init(self, mod: *Module) {
+        self.mod = mod
+        self.ctx = mod.ctx
+    }
+
+    // ---- types ----
+
+    fn typeText(self, id: u32) {
+        local d: *TypeData = self.ctx.types.get(id as usize)
+        switch d.kind {
+            case TypeKind.Void { self.out.append("void") }
+            case TypeKind.Label { self.out.append("label") }
+            case TypeKind.Ptr { self.out.append("ptr") }
+            case TypeKind.Int {
+                self.out.push(b'i')
+                appendUInt(&self.out, d.bits as u64)
+            }
+            case TypeKind.Float {
+                switch d.bits {
+                    case 16 { self.out.append("half") }
+                    case 32 { self.out.append("float") }
+                    default { self.out.append("double") }
+                }
+            }
+            case TypeKind.Array {
+                self.out.push(b'[')
+                appendUInt(&self.out, d.count)
+                self.out.append(" x ")
+                self.typeText(*d.elems.get(0))
+                self.out.push(b']')
+            }
+            case TypeKind.Struct {
+                if d.named {
+                    appendName(&self.out, b'%', &d.name)
+                } else {
+                    self.out.append(d.packed ? "<{" : "{")
+                    for i in 0..d.elems.length() {
+                        self.out.append(i == 0 ? " " : ", ")
+                        self.typeText(*d.elems.get(i))
+                    }
+                    self.out.append(d.elems.length() == 0 ? (d.packed ? "}>" : "}") : (d.packed ? " }>" : " }"))
+                }
+            }
+            case TypeKind.Func {
+                self.typeText(d.ret)
+                self.out.append(" (")
+                self.paramTypes(id)
+                self.out.push(b')')
+            }
+        }
+    }
+
+    /// `T, U, ...` of a function type's parameters.
+    fn paramTypes(self, fnTy: u32) {
+        local d: *TypeData = self.ctx.types.get(fnTy as usize)
+        for i in 0..d.elems.length() {
+            if i > 0 { self.out.append(", ") }
+            self.typeText(*d.elems.get(i))
+        }
+        if d.vararg { self.out.append(d.elems.length() > 0 ? ", ..." : "...") }
+    }
+
+    // ---- values ----
+
+    /// `ty ref`
+    fn typed(self, v: u32) {
+        self.typeText(self.ctx.values.get(v as usize).ty)
+        self.out.push(b' ')
+        self.ref(v)
+    }
+
+    /// The operand text of a value without its type.
+    fn ref(self, v: u32) {
+        local d: *ValueData = self.ctx.values.get(v as usize)
+        switch d.kind {
+            case ValueKind.ConstInt {
+                local w: u32 = self.ctx.types.get(d.ty as usize).bits
+                if w == 1 {
+                    self.out.append(d.bits == 0 ? "false" : "true")
+                } else if w == 64 {
+                    appendInt(&self.out, d.bits as i64)
+                } else {
+                    local shift: u64 = (64 - w) as u64
+                    appendInt(&self.out, ((d.bits << shift) as i64) >> shift)    // sign-extend from the width
+                }
+            }
+            case ValueKind.ConstFloat { appendHex64(&self.out, d.bits) }
+            case ValueKind.Null { self.out.append("null") }
+            case ValueKind.Undef { self.out.append("undef") }
+            case ValueKind.Poison { self.out.append("poison") }
+            case ValueKind.Zero { self.out.append("zeroinitializer") }
+            case ValueKind.Aggregate { self.aggregate(d) }
+            case ValueKind.CString { appendCString(&self.out, &d.name, d.flag) }
+            case ValueKind.GepExpr {
+                self.out.append("getelementptr inbounds (")
+                self.typeText(d.aux)
+                self.out.append(", ")
+                for i in 0..d.ops.length() {
+                    if i > 0 { self.out.append(", ") }
+                    self.typed(*d.ops.get(i))
+                }
+                self.out.push(b')')
+            }
+            case ValueKind.BlockAddr {
+                self.out.append("blockaddress(")
+                self.ref(*d.ops.get(0))
+                self.out.append(", ")
+                self.blockRef(self.mod.funcs.get(d.owner as usize), d.aux)
+                self.out.push(b')')
+            }
+            case ValueKind.Global, ValueKind.Function { appendName(&self.out, b'@', &d.name) }
+            case ValueKind.Arg, ValueKind.Inst { self.localRef(d) }
+            case ValueKind.InlineAsm {
+                self.out.append(d.flag ? "asm sideeffect " : "asm ")
+                appendQuoted(&self.out, &d.name)
+                self.out.append(", ")
+                appendQuoted(&self.out, &d.text)
+            }
+        }
+    }
+
+    /// `%name` or `%N` of an argument or an instruction result.
+    fn localRef(self, d: *ValueData) {
+        if d.name.length() > 0 {
+            appendName(&self.out, b'%', &d.name)
+        } else {
+            self.out.push(b'%')
+            appendInt(&self.out, d.slot)
+        }
+    }
+
+    fn aggregate(self, d: *ValueData) {
+        local t: *TypeData = self.ctx.types.get(d.ty as usize)
+        local array: bool = t.kind == TypeKind.Array
+        local open: str = array ? "[" : (t.packed ? "<{" : "{")
+        local close: str = array ? "]" : (t.packed ? "}>" : "}")
+        self.out.append(open)
+        for i in 0..d.ops.length() {
+            self.out.append(i == 0 ? " " : ", ")
+            self.typed(*d.ops.get(i))
+        }
+        self.out.append(d.ops.length() == 0 ? "" : " ")
+        self.out.append(close)
+    }
+
+    /// `%name` or `%N` of a block of `fd`.
+    fn blockRef(self, fd: *FunctionData, id: u32) {
+        local b: *BlockData = fd.blocks.get(id as usize)
+        if b.name.length() > 0 {
+            appendName(&self.out, b'%', &b.name)
+        } else {
+            self.out.push(b'%')
+            appendInt(&self.out, b.slot)
+        }
+    }
+
+    fn label(self, fd: *FunctionData, id: u32) {
+        self.out.append("label ")
+        self.blockRef(fd, id)
+    }
+
+    // ---- numbering ----
+
+    /// One counter per function for every unnamed argument, block and instruction result, in definition order.
+    fn number(self, fd: *FunctionData) {
+        local n: i64 = 0
+        for i in 0..fd.args.length() {
+            local a: *ValueData = self.ctx.values.get(*fd.args.get(i) as usize)
+            a.slot = -1
+            if a.name.length() == 0 {
+                a.slot = n
+                n += 1
+            }
+        }
+        for b in 0..fd.blocks.length() {
+            local blk: *BlockData = fd.blocks.get(b)
+            blk.slot = -1
+            if blk.name.length() == 0 {
+                blk.slot = n
+                n += 1
+            }
+            for k in 0..blk.insts.length() {
+                local r: u32 = blk.insts.get(k).result
+                if r == NoValue { continue }
+                local v: *ValueData = self.ctx.values.get(r as usize)
+                v.slot = -1
+                if v.name.length() == 0 {
+                    v.slot = n
+                    n += 1
+                }
+            }
+        }
+    }
+
+    // ---- instructions ----
+
+    fn align(self, a: u32) {
+        if a != 0 {
+            self.out.append(", align ")
+            appendUInt(&self.out, a as u64)
+        }
+    }
+
+    fn inst(self, fd: *FunctionData, i: *Inst) {
+        self.out.append("  ")
+        if i.result != NoValue {
+            self.localRef(self.ctx.values.get(i.result as usize))
+            self.out.append(" = ")
+        }
+        switch i.op {
+            case Op.Ret {
+                self.out.append("ret ")
+                self.typed(*i.ops.get(0))
+            }
+            case Op.RetVoid { self.out.append("ret void") }
+            case Op.Br {
+                self.out.append("br ")
+                self.label(fd, *i.blocks.get(0))
+            }
+            case Op.CondBr {
+                self.out.append("br ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.label(fd, *i.blocks.get(0))
+                self.out.append(", ")
+                self.label(fd, *i.blocks.get(1))
+            }
+            case Op.Switch {
+                self.out.append("switch ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.label(fd, *i.blocks.get(0))
+                self.out.append(" [")
+                for k in 1..i.ops.length() {
+                    self.out.append("\n    ")
+                    self.typed(*i.ops.get(k))
+                    self.out.append(", ")
+                    self.label(fd, *i.blocks.get(k))
+                }
+                self.out.append("\n  ]")
+            }
+            case Op.IndirectBr {
+                self.out.append("indirectbr ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", [")
+                for k in 0..i.blocks.length() {
+                    if k > 0 { self.out.append(", ") }
+                    self.label(fd, *i.blocks.get(k))
+                }
+                self.out.push(b']')
+            }
+            case Op.Unreachable { self.out.append("unreachable") }
+            case Op.Binary {
+                appendBinOp(&self.out, i.sub as BinOp)
+                self.out.push(b' ')
+                if (i.flags & FlagNuw) != 0 { self.out.append("nuw ") }
+                if (i.flags & FlagNsw) != 0 { self.out.append("nsw ") }
+                if (i.flags & FlagExact) != 0 { self.out.append("exact ") }
+                if (i.flags & FlagDisjoint) != 0 { self.out.append("disjoint ") }
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.ref(*i.ops.get(1))
+            }
+            case Op.FNeg {
+                self.out.append("fneg ")
+                self.typed(*i.ops.get(0))
+            }
+            case Op.Freeze {
+                self.out.append("freeze ")
+                self.typed(*i.ops.get(0))
+            }
+            case Op.ICmp {
+                self.out.append("icmp ")
+                appendIntPred(&self.out, i.sub as IntPred)
+                self.out.push(b' ')
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.ref(*i.ops.get(1))
+            }
+            case Op.FCmp {
+                self.out.append("fcmp ")
+                appendFloatPred(&self.out, i.sub as FloatPred)
+                self.out.push(b' ')
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.ref(*i.ops.get(1))
+            }
+            case Op.Alloca {
+                self.out.append("alloca ")
+                self.typeText(i.ty)
+                self.align(i.align)
+            }
+            case Op.Load {
+                self.out.append("load ")
+                self.typeText(i.ty)
+                self.out.append(", ")
+                self.typed(*i.ops.get(0))
+                self.align(i.align)
+            }
+            case Op.Store {
+                self.out.append("store ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.typed(*i.ops.get(1))
+                self.align(i.align)
+            }
+            case Op.Gep {
+                self.out.append(i.flag ? "getelementptr inbounds " : "getelementptr ")
+                self.typeText(i.ty)
+                for k in 0..i.ops.length() {
+                    self.out.append(", ")
+                    self.typed(*i.ops.get(k))
+                }
+            }
+            case Op.Cast {
+                appendCastOp(&self.out, i.sub as CastOp)
+                self.out.push(b' ')
+                self.typed(*i.ops.get(0))
+                self.out.append(" to ")
+                self.typeText(i.ty)
+            }
+            case Op.Call {
+                self.out.append("call ")
+                local ft: *TypeData = self.ctx.types.get(i.ty as usize)
+                if ft.vararg {
+                    self.typeText(i.ty)       // a vararg callee needs the whole function type
+                } else {
+                    self.typeText(ft.ret)
+                }
+                self.out.push(b' ')
+                self.ref(*i.ops.get(0))
+                self.out.push(b'(')
+                for k in 1..i.ops.length() {
+                    if k > 1 { self.out.append(", ") }
+                    self.typed(*i.ops.get(k))
+                }
+                self.out.push(b')')
+            }
+            case Op.Phi {
+                self.out.append("phi ")
+                self.typeText(i.ty)
+                for k in 0..i.ops.length() {
+                    self.out.append(k == 0 ? " [ " : ", [ ")
+                    self.ref(*i.ops.get(k))
+                    self.out.append(", ")
+                    self.blockRef(fd, *i.blocks.get(k))
+                    self.out.append(" ]")
+                }
+            }
+            case Op.Select {
+                self.out.append("select ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.typed(*i.ops.get(1))
+                self.out.append(", ")
+                self.typed(*i.ops.get(2))
+            }
+            case Op.ExtractValue {
+                self.out.append("extractvalue ")
+                self.typed(*i.ops.get(0))
+                for k in 0..i.idx.length() {
+                    self.out.append(", ")
+                    appendUInt(&self.out, *i.idx.get(k) as u64)
+                }
+            }
+            case Op.InsertValue {
+                self.out.append("insertvalue ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.typed(*i.ops.get(1))
+                for k in 0..i.idx.length() {
+                    self.out.append(", ")
+                    appendUInt(&self.out, *i.idx.get(k) as u64)
+                }
+            }
+            case Op.AtomicRmw {
+                self.out.append("atomicrmw ")
+                appendAtomicOp(&self.out, i.sub as AtomicOp)
+                self.out.push(b' ')
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.typed(*i.ops.get(1))
+                self.out.push(b' ')
+                appendOrdering(&self.out, i.order)
+                self.align(i.align)
+            }
+            case Op.CmpXchg {
+                self.out.append("cmpxchg ")
+                self.typed(*i.ops.get(0))
+                self.out.append(", ")
+                self.typed(*i.ops.get(1))
+                self.out.append(", ")
+                self.typed(*i.ops.get(2))
+                self.out.push(b' ')
+                appendOrdering(&self.out, i.order)
+                self.out.push(b' ')
+                appendOrdering(&self.out, i.order2)
+                self.align(i.align)
+            }
+            case Op.Fence {
+                self.out.append("fence ")
+                appendOrdering(&self.out, i.order)
+            }
+        }
+        self.out.push(b'\n')
+    }
+
+    // ---- functions and globals ----
+
+    fn function(self, fd: *FunctionData) {
+        local isDecl: bool = fd.blocks.length() == 0
+        local name: *ValueData = self.ctx.values.get(fd.value as usize)
+        local ft: *TypeData = self.ctx.types.get(fd.fnTy as usize)
+        self.out.append(isDecl ? "declare " : "define ")
+        appendLinkage(&self.out, fd.linkage)
+        appendVisibility(&self.out, fd.visibility)
+        self.typeText(ft.ret)
+        self.out.push(b' ')
+        appendName(&self.out, b'@', &name.name)
+        self.out.push(b'(')
+        if isDecl {
+            self.paramTypes(fd.fnTy)
+        } else {
+            self.number(fd)
+            for k in 0..fd.args.length() {
+                if k > 0 { self.out.append(", ") }
+                local a: *ValueData = self.ctx.values.get(*fd.args.get(k) as usize)
+                self.typeText(a.ty)
+                self.out.push(b' ')
+                self.localRef(a)
+            }
+            if ft.vararg { self.out.append(fd.args.length() > 0 ? ", ..." : "...") }
+        }
+        self.out.push(b')')
+        for k in 0..fd.attrs.length() {
+            self.out.push(b' ')
+            appendFnAttr(&self.out, *fd.attrs.get(k))
+        }
+        if fd.section.length() > 0 {
+            self.out.append(" section ")
+            appendQuoted(&self.out, &fd.section)
+        }
+        if fd.align != 0 {
+            self.out.append(" align ")
+            appendUInt(&self.out, fd.align as u64)
+        }
+        if isDecl {
+            self.out.push(b'\n')
+            return
+        }
+        self.out.append(" {\n")
+        for b in 0..fd.blocks.length() {
+            local blk: *BlockData = fd.blocks.get(b)
+            if b > 0 || blk.name.length() > 0 {      // an unnamed entry block has no label line
+                if blk.name.length() > 0 {
+                    appendIdent(&self.out, &blk.name)
+                } else {
+                    appendInt(&self.out, blk.slot)
+                }
+                self.out.append(":\n")
+            }
+            for k in 0..blk.insts.length() { self.inst(fd, blk.insts.get(k)) }
+        }
+        self.out.append("}\n")
+    }
+
+    fn globalDef(self, g: *GlobalData) {
+        local v: *ValueData = self.ctx.values.get(g.value as usize)
+        appendName(&self.out, b'@', &v.name)
+        self.out.append(" = ")
+        if g.initializer == NoValue && g.linkage == Linkage.External {
+            self.out.append("external ")
+        } else {
+            appendLinkage(&self.out, g.linkage)
+        }
+        appendVisibility(&self.out, g.visibility)
+        appendThreadLocal(&self.out, g.threadLocal)
+        appendUnnamedAddr(&self.out, g.unnamedAddr)
+        self.out.append(g.isConst ? "constant " : "global ")
+        self.typeText(g.valueTy)
+        if g.initializer != NoValue {
+            self.out.push(b' ')
+            self.ref(g.initializer)
+        }
+        if g.section.length() > 0 {
+            self.out.append(", section ")
+            appendQuoted(&self.out, &g.section)
+        }
+        self.align(g.align)
+        self.out.push(b'\n')
+    }
+
+    // ---- the module ----
+
+    fn run(self) {
+        local m: *Module = self.mod
+        self.out.append("; ModuleID = ")
+        appendQuoted(&self.out, &m.name)
+        self.out.append("\nsource_filename = ")
+        appendQuoted(&self.out, &m.name)
+        self.out.push(b'\n')
+        if m.dataLayout.length() > 0 {
+            self.out.append("target datalayout = ")
+            appendQuoted(&self.out, &m.dataLayout)
+            self.out.push(b'\n')
+        }
+        if m.triple.length() > 0 {
+            self.out.append("target triple = ")
+            appendQuoted(&self.out, &m.triple)
+            self.out.push(b'\n')
+        }
+        // Identified struct types come first; LLVM accepts forward references, but this keeps the text easy to read.
+        local any: bool = false
+        for t in 0..self.ctx.types.length() {
+            local d: *TypeData = self.ctx.types.get(t)
+            if d.kind != TypeKind.Struct || !d.named { continue }
+            if !any { self.out.push(b'\n') }
+            any = true
+            appendName(&self.out, b'%', &d.name)
+            self.out.append(" = type ")
+            if d.opaque {
+                self.out.append("opaque")
+            } else {
+                self.out.append(d.packed ? "<{" : "{")
+                for k in 0..d.elems.length() {
+                    self.out.append(k == 0 ? " " : ", ")
+                    self.typeText(*d.elems.get(k))
+                }
+                self.out.append(d.elems.length() == 0 ? (d.packed ? "}>" : "}") : (d.packed ? " }>" : " }"))
+            }
+            self.out.push(b'\n')
+        }
+        if m.globals.length() > 0 { self.out.push(b'\n') }
+        for k in 0..m.globals.length() { self.globalDef(m.globals.get(k)) }
+        for k in 0..m.funcs.length() {
+            self.out.push(b'\n')
+            self.function(m.funcs.get(k))
+        }
+        if m.flags.length() > 0 {
+            self.out.append("\n!llvm.module.flags = !{")
+            for k in 0..m.flags.length() {
+                self.out.append(k == 0 ? "!" : ", !")
+                appendUInt(&self.out, k as u64)
+            }
+            self.out.append("}\n")
+            for k in 0..m.flags.length() {
+                local f: *ModuleFlag = m.flags.get(k)
+                self.out.push(b'!')
+                appendUInt(&self.out, k as u64)
+                self.out.append(" = !{i32 ")
+                appendInt(&self.out, f.behavior as i64)
+                self.out.append(", !")
+                appendQuoted(&self.out, &f.key)
+                self.out.append(", i32 ")
+                appendInt(&self.out, f.value)
+                self.out.append("}\n")
+            }
+        }
+    }
+}
+
+/// The first problem that makes the module unprintable: an error recorded by a builder call, or a block without a terminator.
+fn check(mod: *Module) -> String {
+    if mod.ctx.failed { return mod.ctx.error.clone() }
+    for f in 0..mod.funcs.length() {
+        local fd: *FunctionData = mod.funcs.get(f)
+        for b in 0..fd.blocks.length() {
+            local blk: *BlockData = fd.blocks.get(b)
+            local ok: bool = blk.insts.length() > 0 && isTerminator(blk.insts.last())
+            if !ok {
+                local fname: *ValueData = mod.ctx.values.get(fd.value as usize)
+                return format("function @{}: block {} has no terminator", &fname.name, b as u64)
+            }
+        }
+    }
+    return String()
+}
+
+/// The module as `.ll` text, or the first error: one recorded while building, or a block without a terminator.
+export fn printModule(mod: *Module) -> Result<String, String> {
+    local problem: String = check(mod)
+    if problem.length() > 0 { return Result.Err(problem) }
+    local p: Printer = Printer(mod)
+    p.run()
+    return Result.Ok(p.out.clone())
+}

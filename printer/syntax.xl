@@ -1,0 +1,245 @@
+// printer/syntax: the words and literals of the textual IR, https://llvm.org/docs/LangRef.html
+//
+// Together with printer.xl this is the only code that knows the `.ll` syntax. Every function appends to a `String`; nothing here
+// reads the module, so the tables are testable on their own.
+from "std" import String, toString
+from "../ir/value" import Linkage, Visibility, ThreadLocal, UnnamedAddr, FnAttr
+from "../ir/inst" import BinOp, CastOp, IntPred, FloatPred, AtomicOp, AtomicOrdering
+
+const HexDigits: *u8 = "0123456789ABCDEF"
+
+/// Appends `v` in decimal.
+export fn appendInt(out: *String, v: i64) {
+    local s: String = toString(v)
+    out.append(&s)
+}
+
+export fn appendUInt(out: *String, v: u64) {
+    local s: String = toString(v)
+    out.append(&s)
+}
+
+/// Appends `\XX` (two uppercase hex digits), the escape of `c"..."` strings and quoted names:
+/// https://llvm.org/docs/LangRef.html#identifiers
+fn appendEscape(out: *String, b: u8) {
+    out.push(b'\\')
+    out.push(HexDigits[(b >> 4) as usize])
+    out.push(HexDigits[(b & 15) as usize])
+}
+
+/// Appends `0x` and the 16 hex digits of `bits`: the form of floating-point constants,
+/// https://llvm.org/docs/LangRef.html#simple-constants
+export fn appendHex64(out: *String, bits: u64) {
+    out.append("0x")
+    for i in 0..16 { out.push(HexDigits[((bits >> ((15 - i) * 4)) & 15) as usize]) }
+}
+
+/// Whether `name` can be written without quotes: `[-a-zA-Z$._][-a-zA-Z$._0-9]*`.
+fn plainName(name: *String) -> bool {
+    if name.length() == 0 { return false }
+    for i in 0..name.length() {
+        local c: u8 = name.at(i)
+        local letter: bool = (c >= b'a' && c <= b'z') || (c >= b'A' && c <= b'Z') || c == b'-' || c == b'$' || c == b'.' || c == b'_'
+        if !(letter || (i > 0 && c >= b'0' && c <= b'9')) { return false }
+    }
+    return true
+}
+
+/// Appends a quoted string body: printable ASCII as is, `"`, `\` and everything else as `\XX`.
+export fn appendQuoted(out: *String, s: *String) {
+    out.push(b'"')
+    for i in 0..s.length() {
+        local c: u8 = s.at(i)
+        if c < 32 || c > 126 || c == b'"' || c == b'\\' { appendEscape(out, c) } else { out.push(c) }
+    }
+    out.push(b'"')
+}
+
+/// Appends `sigil` and `name`, quoted when it is not a plain identifier: `@main`, `%"a b"`.
+export fn appendName(out: *String, sigil: u8, name: *String) {
+    out.push(sigil)
+    appendIdent(out, name)
+}
+
+/// Appends `name`, quoted when it is not a plain identifier: a block label is `entry:` or `"a b":`.
+export fn appendIdent(out: *String, name: *String) {
+    if plainName(name) { out.append(name) } else { appendQuoted(out, name) }
+}
+
+/// Appends `c"..."` for the bytes of `s`, then `\00` when `nul`.
+export fn appendCString(out: *String, s: *String, nul: bool) {
+    out.append("c\"")
+    for i in 0..s.length() {
+        local c: u8 = s.at(i)
+        if c < 32 || c > 126 || c == b'"' || c == b'\\' { appendEscape(out, c) } else { out.push(c) }
+    }
+    if nul { out.append("\\00") }
+    out.push(b'"')
+}
+
+/// https://llvm.org/docs/LangRef.html#linkage-types; the empty word is `external`.
+export fn appendLinkage(out: *String, l: Linkage) {
+    switch l {
+        case Linkage.External {}
+        case Linkage.Internal { out.append("internal ") }
+        case Linkage.Private { out.append("private ") }
+        case Linkage.Weak { out.append("weak ") }
+        case Linkage.WeakOdr { out.append("weak_odr ") }
+        case Linkage.LinkOnce { out.append("linkonce ") }
+        case Linkage.LinkOnceOdr { out.append("linkonce_odr ") }
+        case Linkage.Common { out.append("common ") }
+        case Linkage.ExternWeak { out.append("extern_weak ") }
+        case Linkage.AvailableExternally { out.append("available_externally ") }
+    }
+}
+
+export fn appendVisibility(out: *String, v: Visibility) {
+    switch v {
+        case Visibility.Default {}
+        case Visibility.Hidden { out.append("hidden ") }
+        case Visibility.Protected { out.append("protected ") }
+    }
+}
+
+export fn appendThreadLocal(out: *String, t: ThreadLocal) {
+    switch t {
+        case ThreadLocal.None {}
+        case ThreadLocal.Dynamic { out.append("thread_local ") }
+        case ThreadLocal.LocalDynamic { out.append("thread_local(localdynamic) ") }
+        case ThreadLocal.InitialExec { out.append("thread_local(initialexec) ") }
+        case ThreadLocal.LocalExec { out.append("thread_local(localexec) ") }
+    }
+}
+
+export fn appendUnnamedAddr(out: *String, u: UnnamedAddr) {
+    switch u {
+        case UnnamedAddr.None {}
+        case UnnamedAddr.Local { out.append("local_unnamed_addr ") }
+        case UnnamedAddr.Global { out.append("unnamed_addr ") }
+    }
+}
+
+/// https://llvm.org/docs/LangRef.html#function-attributes
+export fn appendFnAttr(out: *String, a: FnAttr) {
+    switch a {
+        case FnAttr.NoUnwind { out.append("nounwind") }
+        case FnAttr.NoReturn { out.append("noreturn") }
+        case FnAttr.NoInline { out.append("noinline") }
+        case FnAttr.AlwaysInline { out.append("alwaysinline") }
+        case FnAttr.InlineHint { out.append("inlinehint") }
+        case FnAttr.Cold { out.append("cold") }
+        case FnAttr.OptNone { out.append("optnone") }
+        case FnAttr.OptSize { out.append("optsize") }
+        case FnAttr.MinSize { out.append("minsize") }
+        case FnAttr.ReadNone { out.append("memory(none)") }
+        case FnAttr.ReadOnly { out.append("memory(read)") }
+        case FnAttr.WillReturn { out.append("willreturn") }
+        case FnAttr.NoRecurse { out.append("norecurse") }
+        case FnAttr.NoRedZone { out.append("noredzone") }
+        case FnAttr.NoImplicitFloat { out.append("noimplicitfloat") }
+        case FnAttr.Naked { out.append("naked") }
+    }
+}
+
+export fn appendBinOp(out: *String, op: BinOp) {
+    switch op {
+        case BinOp.Add { out.append("add") }
+        case BinOp.Sub { out.append("sub") }
+        case BinOp.Mul { out.append("mul") }
+        case BinOp.UDiv { out.append("udiv") }
+        case BinOp.SDiv { out.append("sdiv") }
+        case BinOp.URem { out.append("urem") }
+        case BinOp.SRem { out.append("srem") }
+        case BinOp.Shl { out.append("shl") }
+        case BinOp.LShr { out.append("lshr") }
+        case BinOp.AShr { out.append("ashr") }
+        case BinOp.And { out.append("and") }
+        case BinOp.Or { out.append("or") }
+        case BinOp.Xor { out.append("xor") }
+        case BinOp.FAdd { out.append("fadd") }
+        case BinOp.FSub { out.append("fsub") }
+        case BinOp.FMul { out.append("fmul") }
+        case BinOp.FDiv { out.append("fdiv") }
+        case BinOp.FRem { out.append("frem") }
+    }
+}
+
+export fn appendCastOp(out: *String, op: CastOp) {
+    switch op {
+        case CastOp.Trunc { out.append("trunc") }
+        case CastOp.ZExt { out.append("zext") }
+        case CastOp.SExt { out.append("sext") }
+        case CastOp.FpTrunc { out.append("fptrunc") }
+        case CastOp.FpExt { out.append("fpext") }
+        case CastOp.FpToUi { out.append("fptoui") }
+        case CastOp.FpToSi { out.append("fptosi") }
+        case CastOp.UiToFp { out.append("uitofp") }
+        case CastOp.SiToFp { out.append("sitofp") }
+        case CastOp.PtrToInt { out.append("ptrtoint") }
+        case CastOp.IntToPtr { out.append("inttoptr") }
+        case CastOp.BitCast { out.append("bitcast") }
+    }
+}
+
+export fn appendIntPred(out: *String, p: IntPred) {
+    switch p {
+        case IntPred.Eq { out.append("eq") }
+        case IntPred.Ne { out.append("ne") }
+        case IntPred.Ugt { out.append("ugt") }
+        case IntPred.Uge { out.append("uge") }
+        case IntPred.Ult { out.append("ult") }
+        case IntPred.Ule { out.append("ule") }
+        case IntPred.Sgt { out.append("sgt") }
+        case IntPred.Sge { out.append("sge") }
+        case IntPred.Slt { out.append("slt") }
+        case IntPred.Sle { out.append("sle") }
+    }
+}
+
+export fn appendFloatPred(out: *String, p: FloatPred) {
+    switch p {
+        case FloatPred.False { out.append("false") }
+        case FloatPred.Oeq { out.append("oeq") }
+        case FloatPred.Ogt { out.append("ogt") }
+        case FloatPred.Oge { out.append("oge") }
+        case FloatPred.Olt { out.append("olt") }
+        case FloatPred.Ole { out.append("ole") }
+        case FloatPred.One { out.append("one") }
+        case FloatPred.Ord { out.append("ord") }
+        case FloatPred.Uno { out.append("uno") }
+        case FloatPred.Ueq { out.append("ueq") }
+        case FloatPred.Ugt { out.append("ugt") }
+        case FloatPred.Uge { out.append("uge") }
+        case FloatPred.Ult { out.append("ult") }
+        case FloatPred.Ule { out.append("ule") }
+        case FloatPred.Une { out.append("une") }
+        case FloatPred.True { out.append("true") }
+    }
+}
+
+export fn appendAtomicOp(out: *String, op: AtomicOp) {
+    switch op {
+        case AtomicOp.Xchg { out.append("xchg") }
+        case AtomicOp.Add { out.append("add") }
+        case AtomicOp.Sub { out.append("sub") }
+        case AtomicOp.And { out.append("and") }
+        case AtomicOp.Nand { out.append("nand") }
+        case AtomicOp.Or { out.append("or") }
+        case AtomicOp.Xor { out.append("xor") }
+        case AtomicOp.Max { out.append("max") }
+        case AtomicOp.Min { out.append("min") }
+        case AtomicOp.UMax { out.append("umax") }
+        case AtomicOp.UMin { out.append("umin") }
+    }
+}
+
+export fn appendOrdering(out: *String, o: AtomicOrdering) {
+    switch o {
+        case AtomicOrdering.Unordered { out.append("unordered") }
+        case AtomicOrdering.Monotonic { out.append("monotonic") }
+        case AtomicOrdering.Acquire { out.append("acquire") }
+        case AtomicOrdering.Release { out.append("release") }
+        case AtomicOrdering.AcqRel { out.append("acq_rel") }
+        case AtomicOrdering.SeqCst { out.append("seq_cst") }
+    }
+}

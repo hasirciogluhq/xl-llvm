@@ -274,22 +274,22 @@ export class Builder {
     // ---- conversions: https://llvm.org/docs/LangRef.html#conversion-operations ----
 
     fn cast(self, op: CastOp, v: Value, to: Type) -> Value {
-        local from: Type = self.typeOf(v)
-        local fromBits: u32 = self.ctx.bitWidth(from)
+        local src: Type = self.typeOf(v)
+        local srcBits: u32 = self.ctx.bitWidth(src)
         local toBits: u32 = self.ctx.bitWidth(to)
         local ok: bool = false
         switch op {
-            case CastOp.Trunc { ok = self.ctx.isInt(from) && self.ctx.isInt(to) && toBits < fromBits }
-            case CastOp.ZExt, CastOp.SExt { ok = self.ctx.isInt(from) && self.ctx.isInt(to) && toBits > fromBits }
-            case CastOp.FpTrunc { ok = self.ctx.isFloat(from) && self.ctx.isFloat(to) && toBits < fromBits }
-            case CastOp.FpExt { ok = self.ctx.isFloat(from) && self.ctx.isFloat(to) && toBits > fromBits }
-            case CastOp.FpToUi, CastOp.FpToSi { ok = self.ctx.isFloat(from) && self.ctx.isInt(to) }
-            case CastOp.UiToFp, CastOp.SiToFp { ok = self.ctx.isInt(from) && self.ctx.isFloat(to) }
-            case CastOp.PtrToInt { ok = self.ctx.isPtr(from) && self.ctx.isInt(to) }
-            case CastOp.IntToPtr { ok = self.ctx.isInt(from) && self.ctx.isPtr(to) }
+            case CastOp.Trunc { ok = self.ctx.isInt(src) && self.ctx.isInt(to) && toBits < srcBits }
+            case CastOp.ZExt, CastOp.SExt { ok = self.ctx.isInt(src) && self.ctx.isInt(to) && toBits > srcBits }
+            case CastOp.FpTrunc { ok = self.ctx.isFloat(src) && self.ctx.isFloat(to) && toBits < srcBits }
+            case CastOp.FpExt { ok = self.ctx.isFloat(src) && self.ctx.isFloat(to) && toBits > srcBits }
+            case CastOp.FpToUi, CastOp.FpToSi { ok = self.ctx.isFloat(src) && self.ctx.isInt(to) }
+            case CastOp.UiToFp, CastOp.SiToFp { ok = self.ctx.isInt(src) && self.ctx.isFloat(to) }
+            case CastOp.PtrToInt { ok = self.ctx.isPtr(src) && self.ctx.isInt(to) }
+            case CastOp.IntToPtr { ok = self.ctx.isInt(src) && self.ctx.isPtr(to) }
             case CastOp.BitCast {
                 // Opaque pointers make a pointer-to-pointer bitcast a no-op that LLVM rejects as a cast; only same-width scalars.
-                ok = fromBits != 0 && fromBits == toBits && !self.ctx.isPtr(from) && !self.ctx.isPtr(to)
+                ok = srcBits != 0 && srcBits == toBits && !self.ctx.isPtr(src) && !self.ctx.isPtr(to)
             }
         }
         if !ok { self.ctx.fail(String("cast: the conversion does not fit the operand and target types")) }
@@ -342,7 +342,7 @@ export class Builder {
         return self.push(i, ty.id)
     }
 
-    fn addIncoming(self, phi: Value, v: Value, from: Block) {
+    fn addIncoming(self, phi: Value, v: Value, pred: Block) {
         local d: *ValueData = self.ctx.value(phi)
         if d.kind != ValueKind.Inst || !self.same(phi, v) {
             self.ctx.fail(String("phi: the incoming value does not match the phi"))
@@ -350,7 +350,7 @@ export class Builder {
         }
         local i: *Inst = self.mod.funcs.get(d.owner as usize).blocks.get(d.aux as usize).insts.get(d.index as usize)
         i.ops.push(v.id)
-        i.blocks.push(from.id)
+        i.blocks.push(pred.id)
     }
 
     fn select(self, cond: Value, a: Value, b: Value) -> Value {

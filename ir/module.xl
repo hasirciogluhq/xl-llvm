@@ -4,7 +4,8 @@
 // `Module`, `Function` and `Block` are classes whose handles stay valid while the module lives: a `Function` is a (module,
 // index) pair, so adding more functions never invalidates one. Functions may be declared before they are defined and built in
 // any order; names and numbers are assigned by the printer, never by build order.
-from "std" import String, Vec, format
+from "std" import String, Vec, Result, format
+from "../printer/printer" import printModule
 from "types" import Type, TypeKind
 from "value" import Value, ValueKind, ValueData, NoValue, GlobalData, Linkage, Visibility, ThreadLocal, UnnamedAddr, FnAttr
 from "inst" import Inst, Op
@@ -58,6 +59,11 @@ export class Module {
     fn init(self, ctx: *Context, name: String) {
         self.ctx = ctx
         self.name = name
+    }
+
+    /// The module as `.ll` text, or the first error recorded while building it.
+    fn print(self) -> Result<String, String> {
+        return printModule(self)
     }
 
     fn setTriple(self, triple: String) {
