@@ -45,7 +45,7 @@ env:
   XLC_VERSION: ${{ inputs.xlc_version }}
   GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
   # The standard library the package is built against (a tag or branch of hasirciogluhq/xl-std).
-  XL_STD_REF: v1.0.0
+  XL_STD_REF: v1.1.0
   XL_STD: ${{ github.workspace }}/xl-std
 
 jobs:
