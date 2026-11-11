@@ -11,7 +11,7 @@
 // as the `Err`. The tools are found on `PATH`, or in the directory given to `Tools(dir)`. Supported LLVM: 18 and newer (the
 // opaque-pointer text syntax and `-passes=`); the version pinned in CI is in FEATURES.md.
 from "std" import String, Vec, Option, Result, format, fsWrite, fsReadAllString, fsRemove
-from "std/os/process" import Command
+from "std/os/process" import Command, ProcessError
 from "std/os/process" import id as processId
 from "std/os" import env
 

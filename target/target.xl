@@ -1,0 +1,98 @@
+// target/target: target triples and their data layouts, https://llvm.org/docs/LangRef.html#target-triple
+//
+// Text IR has no `TargetMachine` to ask, so the datalayout strings of the supported triples are a table here. The table holds the
+// strings of LLVM 18, the oldest supported release; newer LLVM accepts them (it fills in what it added since: `llc` and `opt`
+// take the module's string as is and check the rest against the target). A triple outside the table gives an empty layout, and
+// the module then prints none, which LLVM replaces with the target's own.
+//
+// The triple is parsed here in xlang, so no LLVM is needed to ask "is this Linux on arm64".
+from "std" import String, Option
+from "../ir/module" import Module
+
+export enum Arch: i32 { X86_64, Aarch64, Other }
+export enum Os: i32 { Linux, Macos, Windows, Other }
+export enum Env: i32 { Gnu, Musl, Msvc, None, Other }
+
+/// A parsed `arch-vendor-os[-env]` triple, https://llvm.org/docs/LangRef.html#target-triple
+export struct Triple {
+    arch: Arch
+    os: Os
+    env: Env
+}
+
+fn startsWith(s: *String, prefix: str) -> bool {
+    return s.startsWith(prefix)
+}
+
+/// Parses `text`; None when the architecture or the operating system is outside the supported set (x86-64 and arm64 on Linux,
+/// macOS and Windows). `arm64` is accepted as `aarch64`, as LLVM does.
+export fn parseTriple(text: *String) -> Option<Triple> {
+    local parts: Vec<String> = split(text.asStr(), "-")
+    if parts.length() < 3 { return Option.None }
+    local t: Triple = Triple { arch: Arch.Other, os: Os.Other, env: Env.None }
+    if parts.get(0).equals("x86_64") { t.arch = Arch.X86_64 }
+    if parts.get(0).equals("aarch64") || parts.get(0).equals("arm64") { t.arch = Arch.Aarch64 }
+    local os: *String = parts.get(2)
+    if os.startsWith("linux") { t.os = Os.Linux }
+    if os.startsWith("macosx") || os.startsWith("darwin") { t.os = Os.Macos }
+    if os.startsWith("windows") { t.os = Os.Windows }
+    if parts.length() > 3 {
+        local env: *String = parts.get(3)
+        if env.startsWith("gnu") { t.env = Env.Gnu }
+        else if env.startsWith("musl") { t.env = Env.Musl }
+        else if env.startsWith("msvc") { t.env = Env.Msvc }
+        else { t.env = Env.Other }
+    }
+    if os.startsWith("windows") && parts.length() == 3 { t.env = Env.Msvc }
+    if t.arch == Arch.Other || t.os == Os.Other { return Option.None }
+    return Option.Some(t)
+}
+
+/// The triple of the machine the program was compiled for (the `os` and `arch` of the xlang build).
+export fn hostTriple() -> String {
+#if os == "linux" && arch == "x86_64"
+    return String("x86_64-unknown-linux-gnu")
+#elif os == "linux" && arch == "aarch64"
+    return String("aarch64-unknown-linux-gnu")
+#elif os == "macos" && arch == "x86_64"
+    return String("x86_64-apple-macosx")
+#elif os == "macos" && arch == "aarch64"
+    return String("arm64-apple-macosx")
+#elif os == "windows" && arch == "x86_64"
+    return String("x86_64-pc-windows-msvc")
+#else
+    return String("aarch64-pc-windows-msvc")
+#endif
+}
+
+/// The datalayout string of LLVM 18 for `t`, or the empty String for a combination outside the table (mingw).
+export fn dataLayout(t: Triple) -> String {
+    if t.os == Os.Windows && t.env != Env.Msvc { return String() }
+    switch t.arch {
+        case Arch.X86_64 {
+            local mangling: str = "e-m:e"
+            if t.os == Os.Macos { mangling = "e-m:o" }
+            if t.os == Os.Windows { mangling = "e-m:w" }
+            local out: String = String(mangling)
+            out.append("-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128")
+            return out
+        }
+        case Arch.Aarch64 {
+            if t.os == Os.Macos { return String("e-m:o-i64:64-i128:128-n32:64-S128") }
+            if t.os == Os.Windows { return String("e-m:w-p:64:64-i32:32-i64:64-i128:128-n32:64-S128") }
+            return String("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128")
+        }
+        default { return String() }
+    }
+}
+
+/// Sets the triple of `m` and, when the triple is in the table, its data layout. A triple that cannot be parsed is an error
+/// recorded in the context (printing then reports it).
+export fn setTarget(m: *Module, triple: String) {
+    local parsed: Option<Triple> = parseTriple(&triple)
+    switch parsed {
+        case Option.None { m.ctx.fail(String("setTarget: unsupported triple")) }
+        case Option.Some(t) { m.setDataLayout(dataLayout(t)) }
+    }
+    m.setTriple(triple)
+}
