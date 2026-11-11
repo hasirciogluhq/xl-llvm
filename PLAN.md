@@ -21,9 +21,11 @@ emit/      turns text into artifacts by running LLVM tools: .ll -> .bc/.o/.s (ll
 ```
 `ir/`, `builder/` and `module/` never touch the OS. Only `emit/` starts processes (through `std/os/process`).
 
-## API shape: the same object API as the C++ `llvm::` API
-Callers never write text. They call an object API that mirrors the C++ one (same concepts, same names where xlang style allows), and the
-text is produced behind it:
+## API shape: a light, solid LLVM library for xlang
+xl-llvm is the LLVM library of xlang: the compiler (and any other tool) calls its functions, the way `xlc` calls the C++ `llvm::` API
+today, and never writes IR text itself. It is not a copy of the C++ API: it keeps the same concepts (context, module, function, block,
+builder) but is designed for xlang (lean, typed handles, `Result`, `Sink`s), and covers what xlang needs rather than all of LLVM.
+The text is produced behind the functions:
 
 ```
 local ctx: Context = Context()
@@ -35,8 +37,8 @@ b.setInsertPoint(fn.addBlock("entry"))
 b.ret(ctx.constInt(ctx.i32(), 42))
 mod.write(&sink)                       // see "Output modes"
 ```
-- A porter of `xlc/src/codegen/llvm` should be able to translate a call one to one (`B_.CreateAdd` → `b.add`, `BasicBlock::Create` →
-  `fn.addBlock`, `Type::getInt32Ty` → `ctx.i32()`). The survey table below is the contract.
+- No one-to-one mapping with the C++ names is promised. The survey table below is the **coverage floor**: everything `xlc` does through
+  `llvm::` today must be expressible, in whatever shape is cleanest in xlang.
 - Values, types and blocks are handles into the `Context` (typed wrappers, so a type cannot be passed as a value); the printer is the
   only code that knows the text syntax. If LLVM changes its syntax, only the printer changes.
 - No global state: everything hangs off a `Context`; two contexts never share anything.
@@ -136,6 +138,4 @@ Rules as in the other repositories: unit tests platform independent, e2e platfor
 2. Which tool does `emit/` call first: `clang` (one tool, also links) or `llc` + `xlc` for linking?
 3. First consumer: e2e programs only, or start porting one `xlc/src/codegen/llvm` file (`types.cpp`, 146 lines, is the smallest)?
 4. Is the `FEATURES.md` row granularity right (one row per instruction form), or per LangRef section?
-5. Names: mirror the C++ names closely (`createAdd`-style) or xlang style (`add`)? The plan assumes xlang style with a documented
-   one-to-one mapping table from the C++ names.
-6. Is streaming (per function) worth its complexity in the first release, or does M0.5 wait until a real consumer needs it?
+5. Is streaming (per function) worth its complexity in the first release, or does M0.5 wait until a real consumer needs it?
