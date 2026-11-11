@@ -1,0 +1,57 @@
+// Direct calls, an indirect call through a function pointer, a variadic call to C `printf`, a c"" string constant and a constant
+// GEP: prints "xl-llvm says 7" and returns 9 (add3(2, 3, 4)).
+from "std" import String, Vec
+from "emit" import begin, finish
+import * from "xl-llvm"
+
+@entry fn main(argc: i32, argv: **u8) -> i32 {
+    local ctx: Context = Context()
+    local m: Module = Module(&ctx, String("calls"))
+    begin(&m, argc, argv)
+    local i32t: Type = ctx.int32()
+    local b: Builder = Builder(&ctx)
+
+    // fn add3(a, b, c) -> i32
+    local p3: Vec<Type> = Vec<Type>()
+    p3.push(i32t)
+    p3.push(i32t)
+    p3.push(i32t)
+    local add3: Function = m.addFunction(String("add3"), ctx.fnType(i32t, p3))
+    add3.setLinkage(Linkage.Internal)
+    b.setInsertPoint(add3.addBlock(String("entry")))
+    b.ret(b.add(b.add(add3.arg(0), add3.arg(1)), add3.arg(2)))
+
+    // declare i32 @printf(ptr, ...)
+    local pp: Vec<Type> = Vec<Type>()
+    pp.push(ctx.ptr())
+    local printf: Function = m.addFunction(String("printf"), ctx.fnType(i32t, pp, true))
+
+    // @fmt = private constant [17 x i8] c"xl-llvm says %d\0A\00"
+    local text: Value = ctx.constString(String("xl-llvm says %d\n"), true)
+    local fmt: Value = m.addGlobal(String("fmt"), ctx.typeOf(text))
+    m.setInitializer(fmt, text)
+    m.setConstant(fmt, true)
+    m.setGlobalLinkage(fmt, Linkage.Private)
+    local zeros: Vec<Value> = Vec<Value>()
+    zeros.push(ctx.constInt(ctx.int64(), 0))
+    zeros.push(ctx.constInt(ctx.int64(), 0))
+    local fmtPtr: Value = ctx.constGep(ctx.typeOf(text), fmt, zeros)
+
+    local f: Function = m.addFunction(String("main"), ctx.fnType(i32t, Vec<Type>()))
+    b.setInsertPoint(f.addBlock(String("entry")))
+    local args: Vec<Value> = Vec<Value>()
+    args.push(ctx.constInt(i32t, 2))
+    args.push(ctx.constInt(i32t, 3))
+    args.push(ctx.constInt(i32t, 4))
+    local nine: Value = b.callFn(add3, args)
+
+    // the same function through its address
+    local viaPtr: Value = b.call(add3.value(), add3.fnType(), args)
+    local same: Value = b.icmp(IntPred.Eq, nine, viaPtr)
+    local say: Vec<Value> = Vec<Value>()
+    say.push(fmtPtr)
+    say.push(b.select(same, ctx.constInt(i32t, 7), ctx.constInt(i32t, 0)))
+    b.callFn(printf, say)
+    b.ret(nine)
+    return finish(&m)
+}
