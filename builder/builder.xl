@@ -1,0 +1,421 @@
+// builder/builder: creates instructions at an insertion point, https://llvm.org/docs/LangRef.html#instruction-reference
+//
+// A `Builder` appends instructions to the end of one basic block. Calls stay plain (no `Result` per instruction): a call that
+// fails a check records the first error in the `Context` (`Context.fail`), naming the call, and returns a harmless value;
+// `Module.print` returns that error. The checks are the ones LLVM would report late against a text line: operand types of
+// binary operations and compares, `store`/`load` through a pointer, `call` arguments against the function type, `phi` incoming
+// types, `ret` against the return type, one terminator per block and nothing after it. Dominance and use-before-definition are
+// left to `opt -verify` (see tools/); the builder does not reimplement the verifier.
+from "std" import String, Vec, format
+from "../ir/types" import Type, TypeKind
+from "../ir/value" import Value, ValueKind, ValueData, NoValue
+from "../ir/inst" import Inst, Op, BinOp, CastOp, IntPred, FloatPred, AtomicOp, AtomicOrdering, FlagNuw, FlagNsw, FlagExact
+from "../ir/context" import Context
+from "../ir/module" import Module, Function, Block, BlockData, FunctionData, isTerminator
+
+export class Builder {
+    ctx: *Context
+    mod: *Module
+    func: u32
+    block: u32
+    placed: bool        // false until `setInsertPoint`
+
+    fn init(self, ctx: *Context) {
+        self.ctx = ctx
+    }
+
+    /// Appends the following instructions to the end of `b`.
+    fn setInsertPoint(self, b: Block) {
+        self.mod = b.mod
+        self.func = b.func
+        self.block = b.id
+        self.placed = true
+    }
+
+    /// The block being built.
+    fn insertBlock(self) -> Block {
+        return Block(self.mod, self.func, self.block)
+    }
+
+    /// The function being built.
+    fn insertFunction(self) -> Function {
+        return Function(self.mod, self.func)
+    }
+
+    // ---- internals ----
+
+    fn current(self) -> *BlockData {
+        return self.mod.funcs.get(self.func as usize).blocks.get(self.block as usize)
+    }
+
+    fn none(self) -> Value {
+        return Value { id: NoValue }
+    }
+
+    /// Appends `i`; `ty` is the type of its result, or NoValue for no result. Returns the result value.
+    fn push(self, i: Inst, ty: u32) -> Value {
+        if !self.placed {
+            self.ctx.fail(String("builder: no insertion point (call setInsertPoint first)"))
+            return self.none()
+        }
+        local b: *BlockData = self.current()
+        if b.insts.length() > 0 && isTerminator(b.insts.last()) {
+            self.ctx.fail(String("builder: an instruction after the terminator of the block"))
+        }
+        local result: Value = self.none()
+        if ty != NoValue {
+            local d: ValueData = ValueData(ValueKind.Inst, ty)
+            d.owner = self.func
+            d.aux = self.block
+            d.index = b.insts.length() as u32
+            result = self.ctx.addValue(d)
+        }
+        i.result = result.id
+        b.insts.push(i)
+        return result
+    }
+
+    fn typeOf(self, v: Value) -> Type {
+        return self.ctx.typeOf(v)
+    }
+
+    fn same(self, a: Value, b: Value) -> bool {
+        return self.ctx.value(a).ty == self.ctx.value(b).ty
+    }
+
+    fn operand(self, i: *Inst, v: Value) {
+        i.ops.push(v.id)
+    }
+
+    // ---- terminators: https://llvm.org/docs/LangRef.html#terminator-instructions ----
+
+    fn ret(self, v: Value) {
+        local want: Type = self.ctx.returnType(Type { id: self.mod.funcs.get(self.func as usize).fnTy })
+        if self.ctx.isVoid(want) || self.typeOf(v).id != want.id {
+            self.ctx.fail(String("ret: the value does not match the return type of the function"))
+        }
+        local i: Inst = Inst(Op.Ret)
+        self.operand(&i, v)
+        self.push(i, NoValue)
+    }
+
+    fn retVoid(self) {
+        local want: Type = self.ctx.returnType(Type { id: self.mod.funcs.get(self.func as usize).fnTy })
+        if !self.ctx.isVoid(want) { self.ctx.fail(String("ret void: the function does not return void")) }
+        self.push(Inst(Op.RetVoid), NoValue)
+    }
+
+    fn br(self, target: Block) {
+        local i: Inst = Inst(Op.Br)
+        i.blocks.push(target.id)
+        self.push(i, NoValue)
+    }
+
+    fn condBr(self, cond: Value, thenBlock: Block, elseBlock: Block) {
+        if self.typeOf(cond).id != self.ctx.int1().id { self.ctx.fail(String("br: the condition is not an i1")) }
+        local i: Inst = Inst(Op.CondBr)
+        self.operand(&i, cond)
+        i.blocks.push(thenBlock.id)
+        i.blocks.push(elseBlock.id)
+        self.push(i, NoValue)
+    }
+
+    /// `switch v, label %default [ case values -> case blocks ]`; the two lists have the same length.
+    fn switchTo(self, v: Value, defaultBlock: Block, values: Vec<Value>, targets: Vec<Block>) {
+        if !self.ctx.isInt(self.typeOf(v)) || values.length() != targets.length() {
+            self.ctx.fail(String("switch: the value is not an integer or the case lists differ in length"))
+        }
+        local i: Inst = Inst(Op.Switch)
+        self.operand(&i, v)
+        i.blocks.push(defaultBlock.id)
+        for k in 0..values.length() {
+            if !self.same(v, *values.get(k)) { self.ctx.fail(String("switch: a case value has another type than the switched value")) }
+            self.operand(&i, *values.get(k))
+            i.blocks.push(targets.get(k).id)
+        }
+        self.push(i, NoValue)
+    }
+
+    /// `indirectbr ptr addr, [ dests ]`; `addr` is usually a `Module.blockAddress` constant or a pointer loaded from one.
+    fn indirectBr(self, addr: Value, dests: Vec<Block>) {
+        if !self.ctx.isPtr(self.typeOf(addr)) { self.ctx.fail(String("indirectbr: the address is not a pointer")) }
+        local i: Inst = Inst(Op.IndirectBr)
+        self.operand(&i, addr)
+        for k in 0..dests.length() { i.blocks.push(dests.get(k).id) }
+        self.push(i, NoValue)
+    }
+
+    fn unreachable(self) {
+        self.push(Inst(Op.Unreachable), NoValue)
+    }
+
+    // ---- arithmetic and logic: https://llvm.org/docs/LangRef.html#binary-operations ----
+
+    /// A binary operation; `flags` is a mix of FlagNuw, FlagNsw and FlagExact where the operation allows them.
+    fn bin(self, op: BinOp, a: Value, b: Value, flags: u32) -> Value {
+        local t: Type = self.typeOf(a)
+        local isF: bool = op == BinOp.FAdd || op == BinOp.FSub || op == BinOp.FMul || op == BinOp.FDiv || op == BinOp.FRem
+        if !self.same(a, b) { self.ctx.fail(String("binary operation: the operand types differ")) }
+        if isF ? !self.ctx.isFloat(t) : !self.ctx.isInt(t) {
+            self.ctx.fail(String("binary operation: the operand type does not fit the operation"))
+        }
+        local i: Inst = Inst(Op.Binary)
+        i.sub = op as i32
+        i.flags = flags
+        self.operand(&i, a)
+        self.operand(&i, b)
+        return self.push(i, t.id)
+    }
+
+    fn add(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Add, a, b, 0) }
+    fn sub(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Sub, a, b, 0) }
+    fn mul(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Mul, a, b, 0) }
+    fn addNsw(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Add, a, b, FlagNsw) }
+    fn subNsw(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Sub, a, b, FlagNsw) }
+    fn mulNsw(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Mul, a, b, FlagNsw) }
+    fn udiv(self, a: Value, b: Value) -> Value { return self.bin(BinOp.UDiv, a, b, 0) }
+    fn sdiv(self, a: Value, b: Value) -> Value { return self.bin(BinOp.SDiv, a, b, 0) }
+    fn urem(self, a: Value, b: Value) -> Value { return self.bin(BinOp.URem, a, b, 0) }
+    fn srem(self, a: Value, b: Value) -> Value { return self.bin(BinOp.SRem, a, b, 0) }
+    fn shl(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Shl, a, b, 0) }
+    fn lshr(self, a: Value, b: Value) -> Value { return self.bin(BinOp.LShr, a, b, 0) }
+    fn ashr(self, a: Value, b: Value) -> Value { return self.bin(BinOp.AShr, a, b, 0) }
+    fn bitAnd(self, a: Value, b: Value) -> Value { return self.bin(BinOp.And, a, b, 0) }
+    fn bitOr(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Or, a, b, 0) }
+    fn bitXor(self, a: Value, b: Value) -> Value { return self.bin(BinOp.Xor, a, b, 0) }
+    fn fadd(self, a: Value, b: Value) -> Value { return self.bin(BinOp.FAdd, a, b, 0) }
+    fn fsub(self, a: Value, b: Value) -> Value { return self.bin(BinOp.FSub, a, b, 0) }
+    fn fmul(self, a: Value, b: Value) -> Value { return self.bin(BinOp.FMul, a, b, 0) }
+    fn fdiv(self, a: Value, b: Value) -> Value { return self.bin(BinOp.FDiv, a, b, 0) }
+    fn frem(self, a: Value, b: Value) -> Value { return self.bin(BinOp.FRem, a, b, 0) }
+
+    /// `fneg`: https://llvm.org/docs/LangRef.html#fneg-instruction
+    fn fneg(self, a: Value) -> Value {
+        if !self.ctx.isFloat(self.typeOf(a)) { self.ctx.fail(String("fneg: the operand is not a floating-point value")) }
+        local i: Inst = Inst(Op.FNeg)
+        self.operand(&i, a)
+        return self.push(i, self.typeOf(a).id)
+    }
+
+    /// `freeze`: https://llvm.org/docs/LangRef.html#freeze-instruction
+    fn freeze(self, a: Value) -> Value {
+        local i: Inst = Inst(Op.Freeze)
+        self.operand(&i, a)
+        return self.push(i, self.typeOf(a).id)
+    }
+
+    // ---- comparisons: https://llvm.org/docs/LangRef.html#icmp-instruction ----
+
+    fn icmp(self, pred: IntPred, a: Value, b: Value) -> Value {
+        local t: Type = self.typeOf(a)
+        if !self.same(a, b) || (!self.ctx.isInt(t) && !self.ctx.isPtr(t)) {
+            self.ctx.fail(String("icmp: the operands are not two integers or two pointers of one type"))
+        }
+        local i: Inst = Inst(Op.ICmp)
+        i.sub = pred as i32
+        self.operand(&i, a)
+        self.operand(&i, b)
+        return self.push(i, self.ctx.int1().id)
+    }
+
+    fn fcmp(self, pred: FloatPred, a: Value, b: Value) -> Value {
+        if !self.same(a, b) || !self.ctx.isFloat(self.typeOf(a)) {
+            self.ctx.fail(String("fcmp: the operands are not two floating-point values of one type"))
+        }
+        local i: Inst = Inst(Op.FCmp)
+        i.sub = pred as i32
+        self.operand(&i, a)
+        self.operand(&i, b)
+        return self.push(i, self.ctx.int1().id)
+    }
+
+    // ---- memory: https://llvm.org/docs/LangRef.html#memory-access-and-addressing-operations ----
+
+    /// A stack slot for one `ty`; `align` 0 uses the ABI alignment.
+    fn alloca(self, ty: Type, align: u32) -> Value {
+        local i: Inst = Inst(Op.Alloca)
+        i.ty = ty.id
+        i.align = align
+        return self.push(i, self.ctx.ptr().id)
+    }
+
+    fn load(self, ty: Type, ptr: Value, align: u32) -> Value {
+        if !self.ctx.isPtr(self.typeOf(ptr)) { self.ctx.fail(String("load: the address is not a pointer")) }
+        local i: Inst = Inst(Op.Load)
+        i.ty = ty.id
+        i.align = align
+        self.operand(&i, ptr)
+        return self.push(i, ty.id)
+    }
+
+    fn store(self, v: Value, ptr: Value, align: u32) {
+        if !self.ctx.isPtr(self.typeOf(ptr)) { self.ctx.fail(String("store: the address is not a pointer")) }
+        local i: Inst = Inst(Op.Store)
+        i.align = align
+        self.operand(&i, v)
+        self.operand(&i, ptr)
+        self.push(i, NoValue)
+    }
+
+    /// `getelementptr` over `srcTy`, `inbounds` when set: https://llvm.org/docs/LangRef.html#getelementptr-instruction
+    fn gep(self, srcTy: Type, ptr: Value, indices: Vec<Value>, inbounds: bool) -> Value {
+        if !self.ctx.isPtr(self.typeOf(ptr)) { self.ctx.fail(String("getelementptr: the base is not a pointer")) }
+        local i: Inst = Inst(Op.Gep)
+        i.ty = srcTy.id
+        i.flag = inbounds
+        self.operand(&i, ptr)
+        for k in 0..indices.length() {
+            if !self.ctx.isInt(self.typeOf(*indices.get(k))) { self.ctx.fail(String("getelementptr: an index is not an integer")) }
+            self.operand(&i, *indices.get(k))
+        }
+        return self.push(i, self.ctx.ptr().id)
+    }
+
+    // ---- conversions: https://llvm.org/docs/LangRef.html#conversion-operations ----
+
+    fn cast(self, op: CastOp, v: Value, to: Type) -> Value {
+        local from: Type = self.typeOf(v)
+        local fromBits: u32 = self.ctx.bitWidth(from)
+        local toBits: u32 = self.ctx.bitWidth(to)
+        local ok: bool = false
+        switch op {
+            case CastOp.Trunc { ok = self.ctx.isInt(from) && self.ctx.isInt(to) && toBits < fromBits }
+            case CastOp.ZExt, CastOp.SExt { ok = self.ctx.isInt(from) && self.ctx.isInt(to) && toBits > fromBits }
+            case CastOp.FpTrunc { ok = self.ctx.isFloat(from) && self.ctx.isFloat(to) && toBits < fromBits }
+            case CastOp.FpExt { ok = self.ctx.isFloat(from) && self.ctx.isFloat(to) && toBits > fromBits }
+            case CastOp.FpToUi, CastOp.FpToSi { ok = self.ctx.isFloat(from) && self.ctx.isInt(to) }
+            case CastOp.UiToFp, CastOp.SiToFp { ok = self.ctx.isInt(from) && self.ctx.isFloat(to) }
+            case CastOp.PtrToInt { ok = self.ctx.isPtr(from) && self.ctx.isInt(to) }
+            case CastOp.IntToPtr { ok = self.ctx.isInt(from) && self.ctx.isPtr(to) }
+            case CastOp.BitCast {
+                // Opaque pointers make a pointer-to-pointer bitcast a no-op that LLVM rejects as a cast; only same-width scalars.
+                ok = fromBits != 0 && fromBits == toBits && !self.ctx.isPtr(from) && !self.ctx.isPtr(to)
+            }
+        }
+        if !ok { self.ctx.fail(String("cast: the conversion does not fit the operand and target types")) }
+        local i: Inst = Inst(Op.Cast)
+        i.sub = op as i32
+        i.ty = to.id
+        self.operand(&i, v)
+        return self.push(i, to.id)
+    }
+
+    fn trunc(self, v: Value, to: Type) -> Value { return self.cast(CastOp.Trunc, v, to) }
+    fn zext(self, v: Value, to: Type) -> Value { return self.cast(CastOp.ZExt, v, to) }
+    fn sext(self, v: Value, to: Type) -> Value { return self.cast(CastOp.SExt, v, to) }
+    fn ptrToInt(self, v: Value, to: Type) -> Value { return self.cast(CastOp.PtrToInt, v, to) }
+    fn intToPtr(self, v: Value) -> Value { return self.cast(CastOp.IntToPtr, v, self.ctx.ptr()) }
+
+    // ---- other: https://llvm.org/docs/LangRef.html#other-operations ----
+
+    /// A call through `callee` (a `Function.value` or any `ptr`) of function type `fnTy`. A call of a `void` function returns a
+    /// value with no id that must not be used.
+    fn call(self, callee: Value, fnTy: Type, args: Vec<Value>) -> Value {
+        local d: *Context = self.ctx
+        if !d.isPtr(self.typeOf(callee)) || d.kind(fnTy) != TypeKind.Func { d.fail(String("call: the callee is not a pointer or the type is not a function type")) }
+        local params: usize = d.paramCount(fnTy)
+        local varargs: bool = d.data(fnTy).vararg
+        if args.length() < params || (args.length() > params && !varargs) {
+            d.fail(format("call: {} arguments for a function of {} parameters", args.length() as u64, params as u64))
+        }
+        local i: Inst = Inst(Op.Call)
+        i.ty = fnTy.id
+        self.operand(&i, callee)
+        for k in 0..args.length() {
+            if k < params && self.typeOf(*args.get(k)).id != d.element(fnTy, k).id {
+                d.fail(format("call: argument {} has the wrong type", k as u64))
+            }
+            self.operand(&i, *args.get(k))
+        }
+        local ret: Type = d.returnType(fnTy)
+        return self.push(i, d.isVoid(ret) ? NoValue : ret.id)
+    }
+
+    fn callFn(self, f: Function, args: Vec<Value>) -> Value {
+        return self.call(f.value(), f.fnType(), args)
+    }
+
+    /// An empty phi of type `ty`; `addIncoming` adds one edge each. Phis must come first in a block (checked by `opt -verify`).
+    fn phi(self, ty: Type) -> Value {
+        local i: Inst = Inst(Op.Phi)
+        i.ty = ty.id
+        return self.push(i, ty.id)
+    }
+
+    fn addIncoming(self, phi: Value, v: Value, from: Block) {
+        local d: *ValueData = self.ctx.value(phi)
+        if d.kind != ValueKind.Inst || !self.same(phi, v) {
+            self.ctx.fail(String("phi: the incoming value does not match the phi"))
+            return
+        }
+        local i: *Inst = self.mod.funcs.get(d.owner as usize).blocks.get(d.aux as usize).insts.get(d.index as usize)
+        i.ops.push(v.id)
+        i.blocks.push(from.id)
+    }
+
+    fn select(self, cond: Value, a: Value, b: Value) -> Value {
+        if self.typeOf(cond).id != self.ctx.int1().id || !self.same(a, b) { self.ctx.fail(String("select: the condition is not an i1 or the arms differ in type")) }
+        local i: Inst = Inst(Op.Select)
+        self.operand(&i, cond)
+        self.operand(&i, a)
+        self.operand(&i, b)
+        return self.push(i, self.typeOf(a).id)
+    }
+
+    /// The element at `index` of a struct or array value.
+    fn extractValue(self, agg: Value, index: u32) -> Value {
+        local t: Type = self.typeOf(agg)
+        local k: TypeKind = self.ctx.kind(t)
+        if k != TypeKind.Struct && k != TypeKind.Array { self.ctx.fail(String("extractvalue: the operand is not a struct or array")) }
+        local i: Inst = Inst(Op.ExtractValue)
+        i.idx.push(index)
+        self.operand(&i, agg)
+        return self.push(i, self.ctx.element(t, index as usize).id)
+    }
+
+    fn insertValue(self, agg: Value, elem: Value, index: u32) -> Value {
+        local t: Type = self.typeOf(agg)
+        local k: TypeKind = self.ctx.kind(t)
+        if k != TypeKind.Struct && k != TypeKind.Array { self.ctx.fail(String("insertvalue: the operand is not a struct or array")) }
+        local i: Inst = Inst(Op.InsertValue)
+        i.idx.push(index)
+        self.operand(&i, agg)
+        self.operand(&i, elem)
+        return self.push(i, t.id)
+    }
+
+    // ---- atomics: https://llvm.org/docs/LangRef.html#atomic-memory-ordering-constraints ----
+
+    fn atomicRmw(self, op: AtomicOp, ptr: Value, v: Value, order: AtomicOrdering, align: u32) -> Value {
+        if !self.ctx.isPtr(self.typeOf(ptr)) || !self.ctx.isInt(self.typeOf(v)) { self.ctx.fail(String("atomicrmw: needs a pointer and an integer value")) }
+        local i: Inst = Inst(Op.AtomicRmw)
+        i.sub = op as i32
+        i.order = order
+        i.align = align
+        self.operand(&i, ptr)
+        self.operand(&i, v)
+        return self.push(i, self.typeOf(v).id)
+    }
+
+    /// Returns the `{ T, i1 }` pair of the old value and the success flag.
+    fn cmpXchg(self, ptr: Value, expected: Value, desired: Value, success: AtomicOrdering, failure: AtomicOrdering, align: u32) -> Value {
+        if !self.ctx.isPtr(self.typeOf(ptr)) || !self.same(expected, desired) { self.ctx.fail(String("cmpxchg: needs a pointer and two values of one type")) }
+        local i: Inst = Inst(Op.CmpXchg)
+        i.order = success
+        i.order2 = failure
+        i.align = align
+        self.operand(&i, ptr)
+        self.operand(&i, expected)
+        self.operand(&i, desired)
+        local fields: Vec<Type> = Vec<Type>()
+        fields.push(self.typeOf(expected))
+        fields.push(self.ctx.int1())
+        return self.push(i, self.ctx.structType(fields, false).id)
+    }
+
+    fn fence(self, order: AtomicOrdering) {
+        local i: Inst = Inst(Op.Fence)
+        i.order = order
+        self.push(i, NoValue)
+    }
+}
