@@ -1,0 +1,6 @@
+// Consumer smoke test: a program that imports the package the way an installed dependency is imported.
+import * from "xl-llvm"
+
+@entry fn main() -> i32 {
+    return 0
+}

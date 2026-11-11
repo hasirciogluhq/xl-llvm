@@ -82,6 +82,19 @@ jobs:
           done
           tar -czf "dist/$name.tar.gz" -C dist "$name"
           (cd dist && sha256sum "$name.tar.gz" >checksums.txt)
+      # The archive is what users get: unpack it and build a program against it before anything is published.
+      - name: Verify the archive as an installed package
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          .github/scripts/install-xlc.sh
+          mkdir -p verify
+          tar -xzf "dist/xl-llvm_${VERSION}.tar.gz" -C verify
+          xlc test/consume/main.xl -M xl-llvm="$PWD/verify/xl-llvm_${VERSION}" -DfeatureDefaultAllocator=true -o verify/consume
+          ./verify/consume
       - name: Create the release
         shell: bash
         env:

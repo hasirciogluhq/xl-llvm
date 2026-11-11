@@ -55,3 +55,16 @@ jobs:
       - run: .github/scripts/install-xlc.sh
       - name: xlc --check index.xl
         run: xlc index.xl --check -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+
+  # An installed package is a directory of source that the compiler gets as a module root (`-M xl-llvm=<dir>`): a program that imports it
+  # must build and run. The release workflow repeats this on the packed archive.
+  consume:
+    name: consume as a package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: .github/scripts/install-xlc.sh
+      - name: Build and run a program that imports xl-llvm
+        run: |
+          xlc test/consume/main.xl -M xl-llvm="$PWD" -DfeatureDefaultAllocator=true -o consume
+          ./consume

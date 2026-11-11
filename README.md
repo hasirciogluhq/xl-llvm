@@ -10,7 +10,7 @@ A light LLVM library for [xlang](https://github.com/hasirciogluhq/xlang), writte
 xlang package install github.com/hasirciogluhq/xl-llvm
 ```
 
-Then `from "github.com/hasirciogluhq/xl-llvm" import ...` (see [packages](https://github.com/hasirciogluhq/xlang-docs) in the xlang documentation).
+This adds the newest stable release to `xlang.toml` and `xlang.lock` (`@v1.2.0` pins a tag). Then `import ... from "github.com/hasirciogluhq/xl-llvm"`. With the standalone compiler, pass the directory yourself: `xlc app.xl -M xl-llvm=<path to this repository>`, then `import ... from "xl-llvm"`. Releases are git tags (`vMAJOR.MINOR.PATCH`); the release workflow tests the tag, builds a program against the packed archive and publishes the archive with its checksum. See the package system in [xlang-docs](https://github.com/hasirciogluhq/xlang-docs) (`compiler/packages`).
 
 ## Layout
 
@@ -22,6 +22,7 @@ PLAN.md           design and milestones
 test/
   unit/           `*.test.xl`, platform independent: printed text compared with the expected `.ll`
   e2e/            platform related: LLVM tools, linking, running the result
+  consume/        a program that imports the package; CI and the release build it against the sources and the archive
   features.sh     checks that FEATURES.md and the tests agree
 .github/          CI and release workflows, and the script that installs the compiler
 ```
