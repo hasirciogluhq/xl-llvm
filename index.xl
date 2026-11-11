@@ -1,3 +1,5 @@
+// xl-llvm: an LLVM library for xlang. Build modules with `Context`, `Module`, `Function` and `Builder`, print LLVM IR text, and run the
+// LLVM tools on it. See README.md for an example, FEATURES.md for what is supported and PLAN.md for the design.
 export * from "ir/types"
 export * from "ir/value"
 export * from "ir/inst"
@@ -5,6 +7,6 @@ export * from "ir/context"
 export * from "ir/module"
 export * from "builder/builder"
 export * from "printer/printer"
-export * from "tools/tools"
 export * from "target/target"
 export * from "intrinsics/intrinsics"
+export * from "tools/tools"

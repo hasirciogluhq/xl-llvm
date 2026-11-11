@@ -1,4 +1,4 @@
-# xl-llvm: plan (draft for discussion)
+# xl-llvm: plan
 
 ## Goal
 xl-llvm is the LLVM library of xlang: a pure `.xl` source package (no native files), installed with the package manager
@@ -104,22 +104,36 @@ Out of scope: `writeArchive` (an `ar` writer is a separate package or the compil
 3. **Names and numbering.** Anonymous values and unnamed blocks share one counter per function in definition order; named values are
    escaped (`%"a b"`); metadata is numbered and uniqued. All of it lives in the printer.
 
+## Decisions taken for 1.0
+1. **Tools and LLVM version.** `opt`, `llc`, `llvm-as` are found on `PATH` or in a directory given to `Tools(dir)`; linking in the e2e
+   tests uses `clang` on the `.ll` file. LLVM 18 is the oldest supported release (opaque pointers, `-passes=`); CI runs 18 on Linux and
+   the newest release on macOS and Windows, and the e2e tests also run on the developer's LLVM.
+2. **Data layout.** A table of the LLVM 18 strings for x86-64 and arm64 on Linux, macOS and Windows (MSVC) in `target/`; newer LLVM
+   accepts them. A triple outside the table prints no layout and LLVM fills in its own. Size and offset calculation is not part of 1.0:
+   the compiler computes layout itself and passes the string through.
+3. **First consumer.** e2e programs only. Porting a file of `xlc/src/codegen/llvm` belongs to the differential milestone.
+4. **Std API types.** Names, texts and lists are `String`, `*String` and `Vec<T>`; handles that need methods (`Function`, `Block`) are
+   classes, plain handles (`Type`, `Value`) are structs. The type shorthands are `int1`..`int64`, `float32`, `float64` because
+   `i32` and `f64` are type names in xlang.
+
 ## Milestones
-- **M0 hello module**: `Context`, `Module`, `Function`, `Builder`, integer types and constants, `define`, `ret`, printer with `print` and
-  `printTo`, `tools/` running `opt -verify` and `llc` on a file, `FEATURES.md` and `features.sh`. Build `i32 @main() { ret i32 42 }`,
-  verify, compile, link, run.
-- **M1 core**: the rest of Module, Types, Constants, Globals/functions and the Builder row, except `atomicrmw`; data layout table.
-- **M2 pipeline**: `.bc`, `.s`, `opt -O<n>`, compile-only legs for other triples.
-- **M3 atomics, intrinsics, inline asm.**
-- **M4 debug info and metadata.**
-- **M5 differential**: the same programs built through `xlc` (C++ LLVM) and through xl-llvm behave the same.
+- **M0 hello module** (done): `Context`, `Module`, `Function`, `Builder`, integer types and constants, `define`, `ret`, printer with
+  `print`, `tools/` running `opt` and `llc`, `FEATURES.md` and `test/features.sh`; `i32 @main() { ret i32 42 }` is verified, compiled,
+  linked and run (`test/e2e/hello.xl`).
+- **M1 core** (done): the rest of Module, Types, Constants, Globals/functions and the Builder rows; data layout table.
+- **M2 pipeline** (done): `.bc`, `.s`, `.o`, `opt -O<n>`, compile-only legs for six triples.
+- **M3 atomics, intrinsics, inline asm** (done).
+- **M4 debug info and metadata** (todo, rows in FEATURES.md).
+- **M5 differential** (todo): the same programs built through `xlc` (C++ LLVM) and through xl-llvm behave the same.
+- Also todo: `printTo` a writer (needs a `Writer` in the stdlib; `print` returns the `String` meanwhile), `volatile`, fast-math flags,
+  wide integers, vectors, exception handling.
 
 ## Layout
 ```
 xl-llvm/
   xlang.toml          package manifest (stdlib only, no other dependencies)
   index.xl            public exports
-  ir/  builder/  printer/  tools/
+  ir/  builder/  printer/  target/  intrinsics/  tools/
   FEATURES.md         the feature table
   test/unit/          *.test.xl, platform independent: printer output, builder checks, triple parser
   test/e2e/           platform related: verify, llc, link, run; tests.txt + run.sh
@@ -128,8 +142,7 @@ xl-llvm/
 Rules as in the other repositories: unit tests platform independent, e2e platform related, the bulk are unit tests, no
 `Co-Authored-By` lines.
 
-## Open questions
-1. Tools and LLVM version (problem 1).
-2. First consumer: e2e programs only, or port one `xlc/src/codegen/llvm` file first (`types.cpp`, 146 lines, is the smallest)?
-3. Does the compiler need sizes and offsets from xl-llvm (problem 2), or does it compute layout itself and only pass the datalayout
-   string through?
+## Language gaps found while building it
+Recorded for the language, not worked around: no way to iterate a `Vec` (`for x in v`; every loop is `for i in 0..v.length()` with
+`v.get(i)`), no `?` for `Result`, a payload bound by `switch` is a copy (so every kept `String` is cloned), a function whose
+`switch` returns in every arm still warns `W0701`, and `Vec<T>` arguments are moved on use (a list needed twice is built twice).

@@ -14,9 +14,11 @@
 ## Workflow
 
 1. Fork, branch from `main`, keep the change focused.
-2. Run the tests of what you changed, then the full suites once:
+2. Run the tests of what you changed, then the full suites once. The standard library is a checkout of
+   [xl-std](https://github.com/hasirciogluhq/xl-std) (`XL_STD`, default `../xl-std`; CI uses the tag in `XL_STD_REF` of `ci.yml`), and
+   the e2e tests need LLVM 18 or newer on `PATH` (or in `LLVM_BIN`):
    ```
-   xlc index.xl --check -DfeatureDefaultAllocator=true
+   xlc index.xl --check -M std=$XL_STD --import std -DfeatureDefaultAllocator=true
    test/unit/run.sh
    test/e2e/run.sh
    test/features.sh
