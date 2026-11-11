@@ -13,12 +13,57 @@ uses, grow feature by feature.
 
 ## Layers
 ```
-ir/        types, values, constants, instructions as data; the printer turns them into text      (pure, platform independent)
-builder/   Builder: insertion point, SSA numbering, block labels, type checks that LLVM would reject
-module/    Module: target triple, datalayout, globals, functions, attributes, metadata, debug info
-emit/      turns text into artifacts by running LLVM tools: .ll -> .bc/.o/.s (llc, opt, clang), verify (llvm-as, opt -verify)   (platform related)
+ir/        Context, types, values, constants, instructions as data (the object API); the printer writes them as text   (pure)
+builder/   Builder: insertion point, SSA numbering, block labels, type checks that LLVM would reject                  (pure)
+module/    Module: target triple, datalayout, globals, functions, attributes, metadata, debug info                    (pure)
+sink/      Sink interface; StringSink, FileSink, WriterSink                                                          (pure, FileSink uses std/io)
+emit/      turns text into artifacts by running LLVM tools: .ll -> .bc/.o/.s (llc, opt, clang), verify; file or pipe   (platform related)
 ```
 `ir/`, `builder/` and `module/` never touch the OS. Only `emit/` starts processes (through `std/os/process`).
+
+## API shape: the same object API as the C++ `llvm::` API
+Callers never write text. They call an object API that mirrors the C++ one (same concepts, same names where xlang style allows), and the
+text is produced behind it:
+
+```
+local ctx: Context = Context()
+local mod: Module = Module(&ctx, "main")
+mod.setTriple("x86_64-pc-linux-gnu")
+local fn: Function = mod.addFunction("main", ctx.fnType(ctx.i32(), []))
+local b: Builder = Builder(&ctx)
+b.setInsertPoint(fn.addBlock("entry"))
+b.ret(ctx.constInt(ctx.i32(), 42))
+mod.write(&sink)                       // see "Output modes"
+```
+- A porter of `xlc/src/codegen/llvm` should be able to translate a call one to one (`B_.CreateAdd` → `b.add`, `BasicBlock::Create` →
+  `fn.addBlock`, `Type::getInt32Ty` → `ctx.i32()`). The survey table below is the contract.
+- Values, types and blocks are handles into the `Context` (typed wrappers, so a type cannot be passed as a value); the printer is the
+  only code that knows the text syntax. If LLVM changes its syntax, only the printer changes.
+- No global state: everything hangs off a `Context`; two contexts never share anything.
+
+## Output modes (every way to get the result out)
+The printer writes to a `Sink` interface (`write(*String)` plus `flush`), so one printer serves every destination:
+
+| Mode | Use case | How |
+|---|---|---|
+| In memory | tests, small modules, handing IR to another component | `mod.toString() -> String`; `StringSink` |
+| File | normal compile, `.ll` for inspection | `FileSink(path)` (buffered, `std/io`) |
+| Stream / writer | stdout, a socket, any `std/io` writer | `WriterSink(*Writer)` |
+| Pipe to a tool | no temp file: print straight into `llc`/`opt`/`clang` stdin and read the result | `emit/` connects a `Sink` to a child process (`std/os/process`) |
+| Per function (streaming) | huge modules without holding all text | `mod.writeHeader(sink)`, `fn.write(sink)` as each function is finished, `mod.writeFooter(sink)` (globals and metadata that must follow) |
+| Per module, many modules | incremental builds, one module per source file, parallel code generation | independent `Context`+`Module` per thread; results are plain `String`s or files, linked later |
+| Artifacts through tools | `.bc`, `.o`, `.s`, `.exe` | `emit/` runs the tool from a `.ll` file or a pipe; the caller picks file or `String` (bytes) as the result |
+
+Also required of the design, so it holds for any topology of a compiler built on it:
+- **Deterministic output**: the same calls give byte-identical text (stable numbering, no hash-order dependence), so build caches and
+  golden tests work. A content hash of a module is available.
+- **Incremental / out-of-order construction**: functions can be built in any order, in several builders at once, and a function can be
+  declared before it is defined; forward references between globals and blocks are resolved by the printer.
+- **Threads**: a `Context` is single-threaded; independent contexts run in parallel. Merging text from several contexts is by
+  declaration (`declare`) plus link, never by sharing handles.
+- **Large inputs**: no quadratic string building (the printer appends to a sink), streaming mode above for modules that do not fit.
+- **Errors**: building returns `Result`; builder errors name the call that failed, tool errors carry the tool's stderr.
+- **Tools optional**: everything up to the text works with no LLVM installed (the unit tests and any consumer that only wants `.ll`).
 
 ## Feature tracking (the core of the design)
 Every IR feature is a row in `FEATURES.md`, and a feature is **done only with both tests**:
@@ -63,7 +108,10 @@ Every IR feature is a row in `FEATURES.md`, and a feature is **done only with bo
 5. **Metadata and debug info** numbering (`!0, !1…`) and uniquing; deferred to M4 but the printer must leave room for it.
 
 ## Milestones
-- **M0 hello module** (unit + e2e): types, `define`, `ret`, constants, printer; build `i32 @main() { ret i32 42 }`, `llc`, link, run.
+- **M0 hello module** (unit + e2e): `Context`, `Module`, `Builder`, types, `define`, `ret`, constants, printer, `Sink` with `StringSink` and
+  `FileSink`; build `i32 @main() { ret i32 42 }`, `llc`, link, run.
+- **M0.5 output modes**: `WriterSink`, streaming (`writeHeader`/`fn.write`/`writeFooter`), pipe-to-tool sink, determinism test (same calls,
+  same bytes; unit), multi-context parallel build (e2e).
 - **M1 core instructions**: everything in the Builder row above except atomics and asm; each with its unit and e2e rows.
 - **M2 emit and tools**: `emit/` for `.bc`, `.o`, `.s`, verify step, tool lookup (problem 1), per-target e2e legs.
 - **M3 atomics, intrinsics, inline asm, TLS, calling conventions.**
@@ -75,7 +123,7 @@ Every IR feature is a row in `FEATURES.md`, and a feature is **done only with bo
 xl-llvm/
   xlang.toml          package manifest (no dependencies; depends on the stdlib only)
   index.xl            public exports
-  ir/  builder/  module/  emit/
+  ir/  builder/  module/  sink/  emit/
   FEATURES.md         the feature table
   test/unit/          *.test.xl, platform independent: printer output, builder checks, triple parser
   test/e2e/           platform related: llc/llvm-as, link, run, per target; tests.txt + run.sh
@@ -88,3 +136,6 @@ Rules as in the other repositories: unit tests platform independent, e2e platfor
 2. Which tool does `emit/` call first: `clang` (one tool, also links) or `llc` + `xlc` for linking?
 3. First consumer: e2e programs only, or start porting one `xlc/src/codegen/llvm` file (`types.cpp`, 146 lines, is the smallest)?
 4. Is the `FEATURES.md` row granularity right (one row per instruction form), or per LangRef section?
+5. Names: mirror the C++ names closely (`createAdd`-style) or xlang style (`add`)? The plan assumes xlang style with a documented
+   one-to-one mapping table from the C++ names.
+6. Is streaming (per function) worth its complexity in the first release, or does M0.5 wait until a real consumer needs it?
