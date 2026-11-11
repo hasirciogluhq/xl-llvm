@@ -1,5 +1,4 @@
 [package]
 name = "github.com/hasirciogluhq/xl-llvm"
 
-# No dependencies: the package uses the standard library only.
 [dependencies]

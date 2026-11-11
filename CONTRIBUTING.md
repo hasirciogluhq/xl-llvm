@@ -4,8 +4,8 @@
 
 ## Rules
 
-- **Pure `.xl` source.** The package has no native files and links nothing; it is installed with the xlang package manager. The stdlib is its only dependency.
-- **Callers never write IR text.** The library generates LLVM IR text behind its functions. The text syntax is known only to the printer, so a syntax change touches one place.
+- **Pure `.xl` source**, installed with `xl install`. The stdlib is its only dependency.
+- **Callers never write IR text.** The library generates it behind its functions; only the printer knows the text syntax.
 - **Every feature has a row in [FEATURES.md](FEATURES.md)** and is done only with both a unit test and an e2e test. `test/features.sh` checks that the table and the tests agree.
 - **Unit tests are platform independent, e2e tests are platform related.** `test/unit/*.test.xl` builds IR and compares the printed text with the expected `.ll`; it never touches the OS (no files, processes, clocks, environment). `test/e2e/` holds what needs the host: running LLVM tools, linking, executing the result, per target. Most tests are unit tests; the e2e table stays the small, heavy part.
 - **Stdlib style applies:** the library is a pyramid (`String`, `Vec<T>`, `Option`, `Result` over raw pointers), signatures take `*String` to borrow and return `String` to give, names carry no module prefix, comments are English and cite the LLVM LangRef section.
