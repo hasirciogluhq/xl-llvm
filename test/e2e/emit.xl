@@ -1,0 +1,39 @@
+// Shared by the e2e programs. Each program builds one module through the xl-llvm API and prints its IR text on stdout; `run.sh`
+// then verifies the text with `opt`, compiles it with `llc` or `clang`, links, runs it and checks the result.
+//
+// Usage of a program:  <program> [target-triple]     (no argument: the triple of the host)
+from "std" import String, Result, print, eprint, fromC
+import * from "xl-llvm"
+
+/// Sets the target of `m` from `argv[1]`, or the host triple without it.
+export fn begin(m: *Module, argc: i32, argv: **u8) {
+    if argc > 1 {
+        setTarget(m, String(fromC(argv[1])))
+    } else {
+        setTarget(m, hostTriple())
+    }
+}
+
+/// The target triple of `m` parsed; the programs that depend on the CPU or OS read it.
+export fn targetOf(m: *Module) -> Triple {
+    local parsed: Option<Triple> = parseTriple(&m.triple)
+    switch parsed {
+        case Option.Some(t) { return t }
+        case Option.None { return Triple { arch: Arch.Other, os: Os.Other, env: Env.None } }
+    }
+}
+
+/// Prints the module; 0, or 2 after printing the recorded error on stderr.
+export fn finish(m: *Module) -> i32 {
+    local r: Result<String, String> = m.print()
+    local code: i32 = 0
+    switch r {
+        case Result.Ok(s) { print(&s) }
+        case Result.Err(e) {
+            eprint(&e)
+            eprint("\n")
+            code = 2
+        }
+    }
+    return code
+}
