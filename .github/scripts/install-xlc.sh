@@ -36,8 +36,8 @@ if [ -z "$tag" ]; then
   if tag=$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null) && [ -n "$tag" ]; then
     echo "xlc: newest stable release is $tag" >&2
   else
-    # The list is newest first.
-    tag=$(gh api "repos/$repo/releases?per_page=100" --jq '[.[] | select(.draft | not) | select(.prerelease)] | first | .tag_name // empty')
+    # The list is not ordered by date (rc.9 comes before rc.10), so the newest is the one published last.
+    tag=$(gh api "repos/$repo/releases?per_page=100" --jq '[.[] | select(.draft | not) | select(.prerelease)] | sort_by(.published_at) | last | .tag_name // empty')
     [ -n "$tag" ] || { echo "error: $repo has no stable release and no pre-release" >&2; exit 1; }
     echo "xlc: no stable release yet, using the newest pre-release $tag" >&2
   fi
