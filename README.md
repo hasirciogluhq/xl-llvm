@@ -64,7 +64,7 @@ import * from "xl-llvm"
 
 ## Tests
 
-Unit tests are platform independent (`test/unit/run.sh`); e2e tests run LLVM, link and execute the result (`test/e2e/run.sh`); `test/features.sh` checks the feature table against the tests. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Unit tests are platform independent (`xl test`); e2e tests run LLVM, link and execute the result (`test/e2e/run.sh`, which builds the xlang programs with `xl`); `test/features.sh` checks the feature table against the tests. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

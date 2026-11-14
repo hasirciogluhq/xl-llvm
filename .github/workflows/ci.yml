@@ -1,22 +1,16 @@
 name: ci
 
-# Tests xl-llvm against the xlang compiler `xlc` and the xlang standard library `xl-std`:
+# Tests xl-llvm with the xlang tool `xl`:
 #   check     type-checks the package for every target
 #   features  FEATURES.md and the test files agree
-#   unit      the platform independent unit suites, built and run on every host
+#   unit      the platform independent unit suites (`xl test`), built and run on every host
 #   e2e       the platform related tests: they run opt, llc, llvm-as, clang and the programs they produce, on every host
 #   consume   a program that imports the package the way an installed dependency is imported
 # Also called by the release workflow before a release is published.
 #
-# The compiler is the newest stable release of `xlc` when it has one, otherwise its newest pre-release (action setup-xl, script
-# install-xlc.sh). The standard library is `hasirciogluhq/xl-std` at XL_STD_REF below. LLVM is installed by the action setup-llvm
-# (18 on Linux, the newest release on macOS, the runner's clang plus MSYS2's opt and llc on Windows); its package downloads are
-# cached. The compiler is a download of a few seconds and is not cached.
-#
-# Reading the compiler repository needs a token while that repository is private: add the secret XLC_TOKEN (contents: read on
-# hasirciogluhq/xlc). Without it the workflow's own token is used, which works once the compiler repository is public.
-#
-# Manual run: `workflow_dispatch` with `xlc_version` (for example v1.0.0-rc.2) pins a compiler release.
+# The action setup-xl installs `xl` and, through it, the newest compiler and standard library (XLC_VERSION and STD_VERSION pin
+# one). LLVM is installed by the action setup-llvm (18 on Linux, the newest release on macOS, the runner's clang plus MSYS2's
+# opt and llc on Windows); its package downloads are cached.
 
 on:
   push:
@@ -33,6 +27,10 @@ on:
         description: "Compiler release tag to use instead of the newest one (optional)"
         type: string
         default: ""
+      std_version:
+        description: "Standard library release tag to use instead of the newest one (optional)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -43,11 +41,7 @@ concurrency:
 
 env:
   XLC_VERSION: ${{ inputs.xlc_version }}
-  GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
-  # The standard library the package is built against (a tag or branch of hasirciogluhq/xl-std). Its sources are under
-  # `src/` (that repository's xlang.toml names `root = "src"`), so the module root is `xl-std/src`.
-  XL_STD_REF: v1.6.1
-  XL_STD: ${{ github.workspace }}/xl-std/src
+  STD_VERSION: ${{ inputs.std_version }}
 
 jobs:
   # The package is pure source: it must type-check for every target, whatever the host is.
@@ -66,11 +60,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-xl
-      - name: xlc src/index.xl --check
-        run: xlc src/index.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+      - name: xl check src/index.xl
+        run: xl check src/index.xl --target ${{ matrix.target }}
       # The tools layer is OS code: check it (through the e2e program that uses it) for every target too.
-      - name: xlc test/e2e/tools.xl --check
-        run: xlc test/e2e/tools.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+      - name: xl check test/e2e/tools.xl
+        run: xl check test/e2e/tools.xl --target ${{ matrix.target }}
 
   features:
     name: features table
@@ -99,7 +93,7 @@ jobs:
         with:
           tools: lld
       - name: Unit suites
-        run: test/unit/run.sh
+        run: xl test
 
   # End-to-end tests drive LLVM: verify the printed text, compile and link it, run the program, check the symbol table, run the
   # compile-only legs for every target.
@@ -124,8 +118,9 @@ jobs:
       - name: End-to-end tests
         run: test/e2e/run.sh
 
-  # An installed package is a directory of source that the compiler gets as a module root (`-M xl-llvm=<dir>`): a program that
-  # imports it must build and run. The release workflow repeats this on the packed archive.
+  # An installed package is a directory of source that the compiler gets as a module root: a program that imports it must build
+  # and run. xlang.local.toml maps the import name to this checkout (the `[package] root` of its xlang.toml applies); the release
+  # workflow repeats this on the packed archive.
   consume:
     name: consume as a package
     runs-on: ubuntu-24.04
@@ -134,5 +129,5 @@ jobs:
       - uses: ./.github/actions/setup-xl
       - name: Build and run a program that imports xl-llvm
         run: |
-          xlc test/consume/main.xl -M xl-llvm="$PWD" -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true -o consume
-          ./consume
+          printf '[modules]\n"xl-llvm" = "."\n' >xlang.local.toml
+          xl run test/consume/main.xl

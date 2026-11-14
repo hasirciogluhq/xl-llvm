@@ -11,6 +11,9 @@
 .xlang/
 .xlang-cache/
 
+# One developer's overrides (see xlang-docs compiler/packages)
+xlang.local.toml
+
 # macOS / IDE
 .DS_Store
 .idea/

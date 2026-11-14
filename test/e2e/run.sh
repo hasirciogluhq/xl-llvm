@@ -1,23 +1,21 @@
 #!/bin/bash
 # End-to-end tests of xl-llvm. They are platform related: they run the LLVM tools, link and execute the result.
-#   test/e2e/run.sh [path/to/xlc] [name-regex]
+#   test/e2e/run.sh [name-regex]
 # Environment:
-#   XLC       the xlang compiler (default `xlc` on PATH)         XL_STD   the standard library directory (default ../xl-std)
 #   CLANG     the C compiler driver used to link (default clang)  LLVM_BIN directory of opt, llc, llvm-nm (default: PATH)
+#
+# The xlang programs are built and run by the `xl` tool, which brings the project's stdlib; only the LLVM steps are shell work.
 #
 # Every program in this folder builds one module through the xl-llvm API and prints the IR text (see emit.xl). The table in
 # tests.txt says what to do with it; fields are separated by `|`, `#` starts a comment:
 #   run|name|exit status|text the output must contain   verify with `opt`, build with clang (-O0), link, run, check status and output
 #   cross|name                                          verify and compile to an object for every triple in `triples` (no run)
-#   diff|name                                           like run, then compare exit status and output with ref/<name>.xl built by xlc
+#   diff|name                                           like run, then compare exit status and output with ref/<name>.xl built by xl
 #   sym|name|present regex|absent regex                 compile to an object and check the symbol table with llvm-nm (not on Windows)
 #   tool|name|exit status|text the output must contain  run the xlang program itself: it drives the tools of xl-llvm
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
-root=$(cd "$here/../.." && pwd)
-xlc=${1:-${XLC:-xlc}}
-filter=${2:-}
-std=${XL_STD:-$root/../xl-std}
+filter=${1:-}
 clang=${CLANG:-clang}
 if [ -n "${LLVM_BIN:-}" ]; then PATH="$LLVM_BIN:$PATH"; fi
 work=$(mktemp -d)
@@ -35,7 +33,7 @@ bad() { echo "FAIL [$1] $2"; [ -n "${3:-}" ] && echo "$3" | head -20; fail=$((fa
 
 # build <name>: the program in this folder, into $work/<name>$exe
 build() {
-  "$xlc" "$here/$1.xl" -M "std=$std" --import std -DfeatureDefaultAllocator=true -o "$work/$1$exe" 2>"$work/$1.build"
+  xl build "$here/$1.xl" -o "$work/$1$exe" 2>"$work/$1.build"
 }
 
 # emit <name> [triple]: the IR text of the program into $work/<name>[.<triple>].ll
@@ -72,16 +70,16 @@ while IFS='|' read -r kind name a b || [ -n "$kind" ]; do
       [ "$leg_ok" = 1 ] && ok "$label"
       ;;
     diff)
-      # The reference program in ref/ is compiled by xlc itself; the IR program built by xl-llvm must behave the same.
-      if ! "$xlc" "$here/ref/$name.xl" -M "std=$std" --import std -DfeatureDefaultAllocator=true -o "$work/$name.ref$exe" 2>"$work/$name.refbuild"; then bad "$label" "reference build" "$(cat "$work/$name.refbuild")"; continue; fi
+      # The reference program in ref/ is compiled by xl itself; the IR program built by xl-llvm must behave the same.
+      if ! xl build "$here/ref/$name.xl" -o "$work/$name.ref$exe" 2>"$work/$name.refbuild"; then bad "$label" "reference build" "$(cat "$work/$name.refbuild")"; continue; fi
       msg=$(emit "$name") || { bad "$label" "emit" "$msg"; continue; }
       if ! out=$(opt -passes=verify -disable-output "$work/$name.ll" 2>&1); then bad "$label" "opt -passes=verify rejected the text" "$out"; continue; fi
       if ! out=$("$clang" -O0 -Wno-override-module "$work/$name.ll" -o "$work/$name.bin$exe" 2>&1); then bad "$label" "clang" "$out"; continue; fi
       want=$("$work/$name.ref$exe" 2>&1); wantCode=$?
       got=$("$work/$name.bin$exe" 2>&1); code=$?
-      if [ "$code" != "$wantCode" ]; then bad "$label" "exit status $code, xlc gives $wantCode" "$got"; continue; fi
-      if [ "$got" != "$want" ]; then bad "$label" "output differs from xlc's" "xl-llvm: $got
-xlc:     $want"; continue; fi
+      if [ "$code" != "$wantCode" ]; then bad "$label" "exit status $code, xl gives $wantCode" "$got"; continue; fi
+      if [ "$got" != "$want" ]; then bad "$label" "output differs from xl's" "xl-llvm: $got
+xl:     $want"; continue; fi
       ok "$label"
       ;;
     sym)
