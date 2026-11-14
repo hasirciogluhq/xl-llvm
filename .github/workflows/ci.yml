@@ -44,9 +44,10 @@ concurrency:
 env:
   XLC_VERSION: ${{ inputs.xlc_version }}
   GH_TOKEN: ${{ secrets.XLC_TOKEN || github.token }}
-  # The standard library the package is built against (a tag or branch of hasirciogluhq/xl-std).
-  XL_STD_REF: v1.1.0
-  XL_STD: ${{ github.workspace }}/xl-std
+  # The standard library the package is built against (a tag or branch of hasirciogluhq/xl-std). Its sources are under
+  # `src/` (that repository's xlang.toml names `root = "src"`), so the module root is `xl-std/src`.
+  XL_STD_REF: v1.6.1
+  XL_STD: ${{ github.workspace }}/xl-std/src
 
 jobs:
   # The package is pure source: it must type-check for every target, whatever the host is.

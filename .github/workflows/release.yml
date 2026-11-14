@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           mkdir -p verify
           tar -xzf "dist/xl-llvm_${VERSION}.tar.gz" -C verify
-          xlc test/consume/main.xl -M xl-llvm="$PWD/verify/xl-llvm_${VERSION}" -M std="$PWD/xl-std" --import std -DfeatureDefaultAllocator=true -o verify/consume
+          xlc test/consume/main.xl -M xl-llvm="$PWD/verify/xl-llvm_${VERSION}" -M std="$PWD/xl-std/src" --import std -DfeatureDefaultAllocator=true -o verify/consume
           ./verify/consume
       - name: Create the release
         shell: bash
