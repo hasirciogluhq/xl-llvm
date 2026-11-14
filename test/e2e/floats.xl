@@ -2,7 +2,7 @@
 //   (1.5 * 4.0 + 1.0) = 7.0 in double; the same through float; both agree, so the result is 7, else 0.
 from "std" import String, Vec
 from "emit" import begin, finish
-import * from "xl-llvm"
+import * from "../../src/index"
 
 @entry fn main(argc: i32, argv: **u8) -> i32 {
     local ctx: Context = Context()

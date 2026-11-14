@@ -2,7 +2,7 @@
 // twice(21) = 42. `opt -passes=verify` checks the debug metadata (scopes, locations, the compile unit) and the link keeps it.
 from "std" import String, Vec
 from "emit" import begin, finish
-import * from "xl-llvm"
+import * from "../../src/index"
 
 @entry fn main(argc: i32, argv: **u8) -> i32 {
     local ctx: Context = Context()

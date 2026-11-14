@@ -3,7 +3,7 @@
 from "std" import String, Vec
 from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectEqStr, expectEq
 from "support" import text, expectHas, expectText, sig0, sig1
-import * from "xl-llvm"
+import * from "../../src"
 
 fn helloModule(t: *T) {
     local ctx: Context = Context()

@@ -2,7 +2,7 @@
 // GEP: prints "xl-llvm says 7" and returns 9 (add3(2, 3, 4)).
 from "std" import String, Vec
 from "emit" import begin, finish
-import * from "xl-llvm"
+import * from "../../src/index"
 
 @entry fn main(argc: i32, argv: **u8) -> i32 {
     local ctx: Context = Context()

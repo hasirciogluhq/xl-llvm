@@ -3,7 +3,7 @@
 from "std" import String, Vec
 from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectEqStr
 from "support" import text, expectHas, sig0, sig1, sig2, one
-import * from "xl-llvm"
+import * from "../../src/index"
 
 fn loopWithPhi(t: *T) {
     local ctx: Context = Context()

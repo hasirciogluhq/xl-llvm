@@ -1,7 +1,7 @@
 // M0: `i32 @main() { ret i32 42 }`, verified, compiled, linked and run: the exit status is 42.
 from "std" import String, Vec
 from "emit" import begin, finish
-import * from "xl-llvm"
+import * from "../../src/index"
 
 @entry fn main(argc: i32, argv: **u8) -> i32 {
     local ctx: Context = Context()

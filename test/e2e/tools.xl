@@ -1,7 +1,7 @@
 // The tools layer: verify, optimize, bitcode, object and assembly on a real module, and the error of a rejected module.
 // Prints "tools ok" when every step behaves.
 from "std" import String, Vec, Option, Result, print, println, fsReadAllString, fsRemove
-import * from "xl-llvm"
+import * from "../../src/index"
 
 /// Checks `cond` and reports the failing step; returns the number of failures (0 or 1).
 fn check(cond: bool, step: str) -> i32 {

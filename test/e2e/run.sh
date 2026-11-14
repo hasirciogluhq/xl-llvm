@@ -35,7 +35,7 @@ bad() { echo "FAIL [$1] $2"; [ -n "${3:-}" ] && echo "$3" | head -20; fail=$((fa
 
 # build <name>: the program in this folder, into $work/<name>$exe
 build() {
-  "$xlc" "$here/$1.xl" -M "std=$std" -M "xl-llvm=$root" --import std -DfeatureDefaultAllocator=true -o "$work/$1$exe" 2>"$work/$1.build"
+  "$xlc" "$here/$1.xl" -M "std=$std" --import std -DfeatureDefaultAllocator=true -o "$work/$1$exe" 2>"$work/$1.build"
 }
 
 # emit <name> [triple]: the IR text of the program into $work/<name>[.<triple>].ll

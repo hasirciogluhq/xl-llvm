@@ -3,7 +3,7 @@
 from "std" import String, Vec
 from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectTrue, expectEqStr
 from "support" import text, expectHas, sig2, sig1
-import * from "xl-llvm"
+import * from "../../src/index"
 
 fn intOps(t: *T) {
     local ctx: Context = Context()

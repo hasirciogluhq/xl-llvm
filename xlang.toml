@@ -1,4 +1,5 @@
 [package]
 name = "github.com/hasirciogluhq/xl-llvm"
+root = "src"
 
 [dependencies]

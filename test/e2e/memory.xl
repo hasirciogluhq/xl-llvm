@@ -3,7 +3,7 @@
 // zeroed stack slot is set to 7.
 from "std" import String, Vec
 from "emit" import begin, finish
-import * from "xl-llvm"
+import * from "../../src/index"
 
 fn list(a: Value, b: Value, c: Value, d: Value) -> Vec<Value> {
     local l: Vec<Value> = Vec<Value>()

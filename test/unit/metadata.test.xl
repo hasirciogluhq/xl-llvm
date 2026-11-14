@@ -3,7 +3,7 @@
 from "std" import String, Vec
 from "std/testing" import Suite, T, suiteInit, test, suiteRun, testFail
 from "support" import text, expectHas, expectNotHas
-import * from "xl-llvm"
+import * from "../../src/index"
 
 fn tuplesAndNamed(t: *T) {
     local ctx: Context = Context()

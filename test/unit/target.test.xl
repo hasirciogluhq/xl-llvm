@@ -2,7 +2,7 @@
 from "std" import String, Option
 from "std/testing" import Suite, T, suiteInit, test, suiteRun, expectEq, expectEqStr, expectTrue
 from "support" import text, expectHas
-import * from "xl-llvm"
+import * from "../../src"
 
 fn parses(text_: str, arch: Arch, os: Os, env: Env, t: *T) {
     local s: String = String(text_)

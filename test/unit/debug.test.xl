@@ -3,7 +3,7 @@
 from "std" import String, Vec
 from "std/testing" import Suite, T, suiteInit, test, suiteRun
 from "support" import text, expectHas, sig1
-import * from "xl-llvm"
+import * from "../../src/index"
 
 fn build(ctx: *Context, m: *Module) {
     local di: DIBuilder = DIBuilder(m, String("a.xl"), String("/src"), String("xl-llvm"))

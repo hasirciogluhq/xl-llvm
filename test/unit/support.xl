@@ -1,7 +1,7 @@
 // Helpers shared by the unit suites. Not a suite itself: `run.sh` only builds `*.test.xl`.
 from "std" import String, Vec, Result, print, println
 from "std/testing" import T, testFail
-import * from "xl-llvm"
+import * from "../../src"
 
 /// The printed text of `m`, or `error: <message>` when printing fails.
 export fn text(m: *Module) -> String {

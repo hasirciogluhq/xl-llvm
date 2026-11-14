@@ -66,11 +66,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-xl
-      - name: xlc index.xl --check
-        run: xlc index.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+      - name: xlc src/index.xl --check
+        run: xlc src/index.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
       # The tools layer is OS code: check it (through the e2e program that uses it) for every target too.
       - name: xlc test/e2e/tools.xl --check
-        run: xlc test/e2e/tools.xl --check -M std="$XL_STD" -M xl-llvm="$PWD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
+        run: xlc test/e2e/tools.xl --check -M std="$XL_STD" --import std -DfeatureDefaultAllocator=true --target ${{ matrix.target }}
 
   features:
     name: features table

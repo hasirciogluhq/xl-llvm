@@ -3,7 +3,7 @@
 // `main` returns 13: exported() = helper() 5 + table 3 = 8, plus weakFn() 1 plus hiddenTable 4.
 from "std" import String, Vec
 from "emit" import begin, finish
-import * from "xl-llvm"
+import * from "../../src/index"
 
 @entry fn main(argc: i32, argv: **u8) -> i32 {
     local ctx: Context = Context()
