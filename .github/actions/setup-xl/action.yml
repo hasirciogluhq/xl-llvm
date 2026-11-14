@@ -1,12 +1,12 @@
 name: Set up xlang
 description: >
-  Installs the xlang tool `xl` with its install script and, through it, the compiler `xlc` and the standard library
-  (`xl lc install`, `xl std install`). Everything after this action speaks `xl`: `xl check`, `xl test`, `xl build`, `xl run`.
-  The installs are a download of a few seconds, so they are not cached. Needs the package checked out.
+  Installs the xlang tool `xl` with the install script of the xlang releases and, through it, the compiler `xlc` and the
+  standard library (`xl lc install`, `xl std install`; they resolve their tags over git, so they need no API token).
+  Everything after this action speaks `xl`: `xl check`, `xl test`, `xl build`, `xl run`. Needs the package checked out.
 
 inputs:
   xl-version:
-    description: "`xl` release to install (install.sh --version: latest, latest-rc, or a tag)"
+    description: "`xl` release to install (latest, latest-stable, latest-rc, or a tag)"
     default: "latest"
   xlc-version:
     description: "Compiler release tag for `xl lc install` (empty: the newest)"
@@ -18,13 +18,48 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install xl
+    # The install script looks the newest release up through the GitHub REST API, which rate-limits the shared runner
+    # addresses (403 without a token); `gh api` is authenticated, so this step resolves the tag and the script downloads
+    # the assets of that one tag directly.
+    - name: Resolve the xl release
+      id: rel
       shell: bash
       env:
-        XL_VERSION: ${{ inputs.xl-version }}
+        GH_TOKEN: ${{ github.token }}
+        WANT: ${{ inputs.xl-version }}
       run: |
-        curl -fsSL https://github.com/hasirciogluhq/xlang/releases/download/v1.0.0-rc.10/install.sh | bash -s --
+        set -euo pipefail
+        want=${WANT:-latest}
+        case "$want" in
+          latest | latest-stable | latest-rc) ;;
+          *) echo "tag=$want" >>"$GITHUB_OUTPUT"; exit 0 ;;
+        esac
+        list=$(gh api "repos/hasirciogluhq/xlang/releases?per_page=100" --jq '.[] | select(.draft | not) | [.tag_name, (if .prerelease then "rc" else "stable" end), .published_at] | @tsv' | sort -t"$(printf '\t')" -k3,3r)
+        [ -n "$list" ] || { echo "error: hasirciogluhq/xlang has no releases" >&2; exit 1; }
+        stable=$(awk -F'\t' '$2 == "stable" { print $1; exit }' <<<"$list")
+        case "$want" in
+          latest) tag=${stable:-$(head -1 <<<"$list" | cut -f1)} ;;
+          latest-stable) tag=$stable ;;
+          latest-rc) tag=$(awk -F'\t' '$2 == "rc" { print $1; exit }' <<<"$list") ;;
+        esac
+        [ -n "$tag" ] || { echo "error: no release matches $want" >&2; exit 1; }
+        echo "tag=$tag" >>"$GITHUB_OUTPUT"
+    - name: Install xl (macOS, Linux)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        curl -fsSL https://github.com/hasirciogluhq/xlang/releases/download/v1.0.0-rc.10/install.sh | bash -s -- --version "${{ steps.rel.outputs.tag }}"
         echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+    - name: Install xl (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        XL_VERSION: ${{ steps.rel.outputs.tag }}
+      run: |
+        $src = Join-Path $env:RUNNER_TEMP 'install.ps1'
+        Invoke-WebRequest -Uri 'https://github.com/hasirciogluhq/xlang/releases/download/v1.0.0-rc.10/install.ps1' -OutFile $src
+        & $src
+        Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'xlang\bin')
     - name: Install the toolchain
       shell: bash
       run: |
